@@ -27,8 +27,8 @@ CUSTOM_VOICE_ENDPOINT_ID = ""
 CONTINUOUS_CONVERSATION = False
 
 # Avatar Configuration
-AVATAR_CHARACTER = "lisa"
-AVATAR_STYLE = "casual-sitting"
+AVATAR_CHARACTER = "jeff"
+AVATAR_STYLE = "business"
 PHOTO_AVATAR = False
 CUSTOMIZED_AVATAR = False
 USE_BUILT_IN_VOICE = False
@@ -37,7 +37,7 @@ USE_LOCAL_VIDEO_FOR_IDLE = False
 SHOW_SUBTITLES = False
 
 # System Prompt
-SYSTEM_PROMPT = "You are an AI assistant that helps people find information."
+SYSTEM_PROMPT = "You are a business coach that provides insights in meetings."
 
 client = AzureOpenAI(
     azure_endpoint=AZURE_OPENAI_ENDPOINT,
