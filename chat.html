@@ -740,10 +740,8 @@
                     token
                 )
             } else {
-                speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(
-                    new URL(`wss://${cogSvcRegion}.stt.speech.microsoft.com/speech/universal/v2`),
-                    token
-                )
+                // Use fromAuthorizationToken for public Azure Speech Service
+                speechRecognitionConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, cogSvcRegion)
             }
             speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
             var sttLocales = appConfig.sttTts.sttLocales.split(',')
