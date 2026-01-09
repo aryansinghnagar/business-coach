@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>AI Avatar Chat</title>
+    <script>
+        // Aggressive polyfill for RTCPeerConnection.getConfiguration
+        (function() {
+            if (typeof RTCPeerConnection === 'undefined') return;
+            
+            const OriginalRTC = window.RTCPeerConnection;
+            const getConfigImpl = function() {
+                return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
+            };
+            
+            // Patch prototype
+            if (typeof OriginalRTC.prototype.getConfiguration !== 'function') {
+                OriginalRTC.prototype.getConfiguration = getConfigImpl;
+            }
+            
+            // Use Proxy to intercept all RTCPeerConnection creations
+            window.RTCPeerConnection = new Proxy(OriginalRTC, {
+                construct: function(target, args) {
+                    const pc = new target(...args);
+                    // Ensure getConfiguration exists on the instance
+                    if (typeof pc.getConfiguration !== 'function') {
+                        pc.getConfiguration = getConfigImpl;
+                    }
+                    return pc;
+                },
+                get: function(target, prop) {
+                    return target[prop];
+                }
+            });
+        })();
+    </script>
+    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
+    <script>
+        // Re-apply after SDK loads (SDK might replace RTCPeerConnection)
+        (function() {
+            if (typeof RTCPeerConnection === 'undefined') return;
+            
+            const getConfigImpl = function() {
+                return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
+            };
+            
+            // Re-patch prototype
+            if (typeof RTCPeerConnection.prototype.getConfiguration !== 'function') {
+                RTCPeerConnection.prototype.getConfiguration = getConfigImpl;
+            }
+            
+            // Re-apply Proxy if SDK replaced it
+            const currentRTC = window.RTCPeerConnection;
+            // Check if it's already a Proxy by trying to access Proxy-specific properties
+            let needsProxy = true;
+            try {
+                // If it's already our Proxy, it should have been set up correctly
+                const test = new currentRTC();
+                if (typeof test.getConfiguration === 'function') {
+                    test.close();
+                    needsProxy = false;
+                } else {
+                    test.close();
+                }
+            } catch (e) {
+                // If we can't test, assume we need Proxy
+            }
+            
+            if (needsProxy) {
+                const OriginalRTC = currentRTC;
+                window.RTCPeerConnection = new Proxy(OriginalRTC, {
+                    construct: function(target, args) {
+                        const pc = new target(...args);
+                        if (typeof pc.getConfiguration !== 'function') {
+                            pc.getConfiguration = getConfigImpl;
+                        }
+                        return pc;
+                    },
+                    get: function(target, prop) {
+                        return target[prop];
+                    }
+                });
+            }
+        })();
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 1000px;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+        }
+        #video-container {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #1e293b;
+            border-radius: 15px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #94a3b8;
+            margin-bottom: 20px;
+        }
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(30, 41, 59, 0.6);
+            color: #fff;
+            font-size: 1rem;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        button:hover {
+            opacity: 0.9;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: rgba(71, 85, 105, 0.7);
+        }
+        .status {
+            padding: 12px;
+            background: rgba(30, 41, 59, 0.6);
+            border-radius: 8px;
+        }
+        .status span {
+            color: #fbbf24;
+            font-weight: 600;
+        }
+        .status span.ready {
+            color: #10b981;
+        }
+        .status span.error {
+            color: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="video-container">
+            <video id="remoteVideo" autoplay playsinline muted></video>
+        </div>
+        <div class="controls">
+            <h1>AI Avatar Chat</h1>
+            <p class="subtitle">Start the avatar, then type a message to have a conversation.</p>
+            <div class="row">
+                <button id="startBtn" onclick="initAvatar()">Start Avatar</button>
+                <button id="stopBtn" class="secondary" onclick="stopAvatar()" disabled>Stop</button>
+            </div>
+            <div class="row">
+                <input id="userInput" type="text" placeholder="Ask me something..." />
+                <button id="sendBtn" onclick="handleChat()" disabled>Send</button>
+            </div>
+            <div class="status" id="statusText">Status: <span>Idle</span></div>
+        </div>
+    </div>
+
+    <script>
+        let synthesizer = null;
+
+        function setStatus(text, clazz) {
+            const span = document.querySelector("#statusText span");
+            span.textContent = text;
+            span.className = clazz || "";
+        }
+
+        async function waitForSDK() {
+            for (let i = 0; i < 50; i++) {
+                if (typeof SpeechSDK !== 'undefined') return;
+                await new Promise(r => setTimeout(r, 100));
+            }
+            throw new Error('SDK failed to load');
+        }
+
+        async function initAvatar() {
+            if (synthesizer) return;
+            if (window.location.protocol === 'file:') {
+                setStatus("Please access via http://localhost:5000", "error");
+                return;
+            }
+
+            try {
+                await waitForSDK();
+                setStatus("Requesting token…", "");
+                document.getElementById("startBtn").disabled = true;
+
+                const res = await fetch("http://localhost:5000/speech/token");
+                if (!res.ok) throw new Error(`Failed: ${res.status}`);
+                
+                const { token, region } = await res.json();
+
+                // Final patch right before creating synthesizer
+                if (typeof RTCPeerConnection !== 'undefined' && typeof RTCPeerConnection.prototype.getConfiguration !== 'function') {
+                    RTCPeerConnection.prototype.getConfiguration = function() {
+                        return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
+                    };
+                }
+
+                const config = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
+                const avatarConfig = new SpeechSDK.AvatarConfig("lisa", "casual-sitting");
+                synthesizer = new SpeechSDK.AvatarSynthesizer(config, avatarConfig);
+
+                synthesizer.startAvatarAsync(
+                    () => {
+                        setStatus("Ready", "ready");
+                        document.getElementById("stopBtn").disabled = false;
+                        document.getElementById("sendBtn").disabled = false;
+                    },
+                    (err) => {
+                        console.error("Error:", err);
+                        setStatus("Error starting avatar", "error");
+                        document.getElementById("startBtn").disabled = false;
+                    }
+                );
+            } catch (err) {
+                console.error("Init error:", err);
+                setStatus(err.message.includes('SDK') ? "SDK failed to load" : "Failed to initialize", "error");
+                document.getElementById("startBtn").disabled = false;
+            }
+        }
+
+        function stopAvatar() {
+            if (!synthesizer) return;
+            synthesizer.stopAvatarAsync(() => setStatus("Stopped", ""));
+            synthesizer = null;
+            document.getElementById("stopBtn").disabled = true;
+            document.getElementById("sendBtn").disabled = true;
+            document.getElementById("startBtn").disabled = false;
+        }
+
+        async function handleChat() {
+            if (!synthesizer) {
+                setStatus("Start avatar first", "");
+                return;
+            }
+
+            const input = document.getElementById("userInput").value.trim();
+            if (!input) return;
+
+            setStatus("Processing…", "");
+
+            try {
+                const res = await fetch("http://localhost:5000/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: input }),
+                });
+                const { response } = await res.json();
+
+                setStatus("Speaking…", "");
+                synthesizer.speakTextAsync(
+                    response,
+                    () => setStatus("Ready", "ready"),
+                    (err) => {
+                        console.error(err);
+                        setStatus("Error", "error");
+                    }
+                );
+                document.getElementById("userInput").value = "";
+            } catch (err) {
+                console.error(err);
+                setStatus("Failed", "error");
+            }
+        }
+
+        document.getElementById("userInput").addEventListener("keypress", (e) => {
+            if (e.key === "Enter" && !document.getElementById("sendBtn").disabled) {
+                handleChat();
+            }
+        });
+    </script>
+</body>
+</html>
