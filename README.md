@@ -1,7 +1,9 @@
 # Business-Coach
 AI Assistant for providing real-time insights in business meetings
 
-1. Run python app.py
-2. Open localhost:5000 in browser
-3. Press "Open Chat Session" to begin interacting
-4. Press "Start Microphone" to converse with the agent
+1. Run "start_here.bat"
+2. Click "Start Server"
+3. Click "Open in Browser"
+4. Choose video source
+5. Press "Initialize Avatar Session" to begin interacting
+6. Press "Start Microphone" to converse with the agent
