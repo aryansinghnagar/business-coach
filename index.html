@@ -3,10 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Talking Avatar Chat Demo</title>
+    <title>Business Meeting Copilot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
     <script>
-        // Aggressive polyfill for RTCPeerConnection.getConfiguration
+        // WebRTC polyfill for RTCPeerConnection.getConfiguration (required for avatar audio)
         (function() {
             if (typeof RTCPeerConnection === 'undefined') return;
             
@@ -15,16 +18,13 @@
                 return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
             };
             
-            // Patch prototype
             if (typeof OriginalRTC.prototype.getConfiguration !== 'function') {
                 OriginalRTC.prototype.getConfiguration = getConfigImpl;
             }
             
-            // Use Proxy to intercept all RTCPeerConnection creations
             window.RTCPeerConnection = new Proxy(OriginalRTC, {
                 construct: function(target, args) {
                     const pc = new target(...args);
-                    // Ensure getConfiguration exists on the instance
                     if (typeof pc.getConfiguration !== 'function') {
                         pc.getConfiguration = getConfigImpl;
                     }
@@ -38,7 +38,7 @@
     </script>
     <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
     <script>
-        // Re-apply after SDK loads (SDK might replace RTCPeerConnection)
+        // Re-apply WebRTC polyfill after SDK loads
         (function() {
             if (typeof RTCPeerConnection === 'undefined') return;
             
@@ -46,40 +46,8 @@
                 return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
             };
             
-            // Re-patch prototype
             if (typeof RTCPeerConnection.prototype.getConfiguration !== 'function') {
                 RTCPeerConnection.prototype.getConfiguration = getConfigImpl;
-            }
-            
-            // Re-apply Proxy if SDK replaced it
-            const currentRTC = window.RTCPeerConnection;
-            let needsProxy = true;
-            try {
-                const test = new currentRTC();
-                if (typeof test.getConfiguration === 'function') {
-                    test.close();
-                    needsProxy = false;
-                } else {
-                    test.close();
-                }
-            } catch (e) {
-                // If we can't test, assume we need Proxy
-            }
-            
-            if (needsProxy) {
-                const OriginalRTC = currentRTC;
-                window.RTCPeerConnection = new Proxy(OriginalRTC, {
-                    construct: function(target, args) {
-                        const pc = new target(...args);
-                        if (typeof pc.getConfiguration !== 'function') {
-                            pc.getConfiguration = getConfigImpl;
-                        }
-                        return pc;
-                    },
-                    get: function(target, prop) {
-                        return target[prop];
-                    }
-                });
             }
         })();
     </script>
@@ -92,219 +60,472 @@
         }
         
         body {
-            font-family: Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            background-attachment: fixed;
             color: #fff;
             min-height: 100vh;
-            padding: 20px;
+            padding: 24px;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(255, 119, 198, 0.3) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
         }
         
         .main-container {
             max-width: 1400px;
             margin: 0 auto;
+            position: relative;
+            z-index: 1;
         }
         
         h1 {
-            font-size: 2rem;
-            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 12px;
             text-align: center;
+            background: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.02em;
+            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
         
-        .config-panel {
-            background: rgba(15, 23, 42, 0.9);
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-        }
-        
-        .config-section {
-            margin-bottom: 25px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .config-section:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-        
-        .section-header {
-            font-size: 1.2rem;
-            font-weight: 600;
-            margin-bottom: 15px;
-            color: #e0e7ff;
-            cursor: pointer;
-            user-select: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .section-header::before {
-            content: '▼';
-            font-size: 0.8rem;
-            transition: transform 0.3s ease;
-        }
-        
-        .section-header.collapsed::before {
-            transform: rotate(-90deg);
-        }
-        
-        .section-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 15px;
-            transition: all 0.3s ease;
-        }
-        
-        .section-content.collapsed {
-            display: none;
-        }
-        
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        
-        .form-group.full-width {
-            grid-column: 1 / -1;
-        }
-        
-        label {
-            color: #94a3b8;
-            font-size: 0.9rem;
-            font-weight: 500;
-        }
-        
-        input[type="text"],
-        input[type="password"],
-        select,
-        textarea {
-            padding: 12px;
-            border-radius: 8px;
+        .status-indicator {
+            padding: 16px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            margin-bottom: 24px;
+            text-align: center;
+            font-size: 0.95rem;
+            color: rgba(255, 255, 255, 0.9);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            background: rgba(30, 41, 59, 0.6);
-            color: #fff;
-            font-size: 0.95rem;
-            font-family: Arial, sans-serif;
-            transition: all 0.3s ease;
-            width: 100%;
-        }
-        
-        input[type="text"]:focus,
-        input[type="password"]:focus,
-        select:focus,
-        textarea:focus {
-            outline: none;
-            border-color: #667eea;
-            background: rgba(30, 41, 59, 0.8);
-        }
-        
-        textarea {
-            min-height: 80px;
-            resize: vertical;
-        }
-        
-        select {
-            cursor: pointer;
-        }
-        
-        .checkbox-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            align-items: center;
-            padding: 10px 0;
-        }
-        
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-        }
-        
-        input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-            accent-color: #667eea;
-        }
-        
-        .checkbox-item label {
-            cursor: pointer;
-            color: #e0e7ff;
-            margin: 0;
-            font-size: 0.95rem;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            font-weight: 500;
         }
         
         .button-group {
             display: flex;
             flex-wrap: wrap;
             gap: 12px;
-            margin: 30px 0;
+            margin-bottom: 32px;
             justify-content: center;
         }
         
         button {
-            padding: 12px 24px;
-            border-radius: 8px;
+            padding: 14px 28px;
+            border-radius: 12px;
             border: none;
             cursor: pointer;
             font-weight: 600;
-            font-size: 1rem;
-            font-family: Arial, sans-serif;
+            font-size: 0.95rem;
+            font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: left 0.5s;
+        }
+        
+        button:hover:not(:disabled)::before {
+            left: 100%;
         }
         
         button:hover:not(:disabled) {
-            opacity: 0.9;
-            transform: translateY(-1px);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+        }
+        
+        button:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow: 0 2px 10px rgba(102, 126, 234, 0.4);
         }
         
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
         }
         
         button.secondary {
-            background: rgba(71, 85, 105, 0.7);
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+        }
+        
+        button.secondary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
         }
         
         button.danger {
-            background: rgba(239, 68, 68, 0.8);
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
         }
         
-        #videoContainer {
-            background: rgba(15, 23, 42, 0.9);
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        button.danger:hover:not(:disabled) {
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
+        }
+        
+        .chat-container {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 32px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.2),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
             display: grid;
             grid-template-columns: 2fr 1fr;
-            gap: 30px;
+            gap: 32px;
             align-items: start;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
         
         .video-section {
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 24px;
+        }
+        
+        .video-container {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+        
+        .engagement-bar-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            min-width: 60px;
+            padding: 16px 8px;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .engagement-bar-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.8);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            margin-bottom: 8px;
+        }
+        
+        .engagement-bar-wrapper {
+            position: relative;
+            width: 24px;
+            height: 400px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .engagement-bar-fill {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 0%;
+            /* Color will be set dynamically via JavaScript based on score */
+            background: linear-gradient(180deg, rgba(239, 68, 68, 0.7) 0%, rgba(239, 68, 68, 0.9) 100%);
+            transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s ease;
+            border-radius: 10px;
+            box-shadow: 
+                0 -4px 12px rgba(0, 0, 0, 0.3),
+                inset 0 2px 4px rgba(255, 255, 255, 0.2);
+        }
+        
+        .engagement-bar-value {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-90deg);
+            font-size: 1rem;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.95);
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+            white-space: nowrap;
+            z-index: 10;
+        }
+        
+        .engagement-level-indicator {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            margin-top: 8px;
+            padding: 4px 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            min-height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Video Source Selector Modal Styles */
+        .video-source-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+        
+        .video-source-modal.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        
+        .video-source-modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+        }
+        
+        .video-source-modal-content {
+            position: relative;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 32px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 
+                0 20px 60px rgba(0, 0, 0, 0.3),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
+            transform: scale(0.95);
+            transition: transform 0.3s ease;
+        }
+        
+        .video-source-modal.active .video-source-modal-content {
+            transform: scale(1);
+        }
+        
+        .video-source-modal-header {
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        
+        .video-source-modal-header h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        
+        .video-source-modal-header p {
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .video-source-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        
+        .video-source-option {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .video-source-option:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .video-source-option input[type="radio"]:checked + label ~ *,
+        .video-source-option:has(input[type="radio"]:checked) {
+            background: rgba(99, 102, 241, 0.2);
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+        
+        .video-source-icon {
+            font-size: 2rem;
+            flex-shrink: 0;
+        }
+        
+        .video-source-info {
+            flex: 1;
+        }
+        
+        .video-source-info h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #fff;
+        }
+        
+        .video-source-info p {
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .video-source-radio {
+            flex-shrink: 0;
+        }
+        
+        .video-source-radio input[type="radio"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            accent-color: #6366f1;
+        }
+        
+        .video-source-file-input {
+            margin-bottom: 24px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+        }
+        
+        .file-input-label {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+        }
+        
+        .file-input-button {
+            padding: 10px 20px;
+            background: rgba(99, 102, 241, 0.2);
+            border: 1px solid rgba(99, 102, 241, 0.5);
+            border-radius: 8px;
+            color: #fff;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        .file-input-button:hover {
+            background: rgba(99, 102, 241, 0.3);
+            border-color: rgba(99, 102, 241, 0.7);
+        }
+        
+        .file-input-text {
+            color: #9ca3af;
+            font-size: 0.9rem;
+        }
+        
+        .file-input-hint {
+            margin-top: 8px;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .video-source-modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        
+        .btn-cancel,
+        .btn-confirm {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            font-size: 0.9rem;
+        }
+        
+        .btn-cancel {
+            background: rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .btn-cancel:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-confirm {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+            color: #fff;
+        }
+        
+        .btn-confirm:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
         }
         
         #remoteVideo {
+            flex: 1;
             width: 100%;
             aspect-ratio: 16/9;
-            background: #1e293b;
-            border-radius: 15px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 20px;
             overflow: hidden;
             position: relative;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        #remoteVideo:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 12px 40px rgba(0, 0, 0, 0.4),
+                inset 0 0 0 1px rgba(255, 255, 255, 0.15);
         }
         
         #remoteVideo video {
@@ -314,52 +535,89 @@
             display: block;
         }
         
+        #subtitles {
+            width: 90%;
+            text-align: center;
+            color: white;
+            text-shadow: 
+                -1px -1px 2px rgba(0, 0, 0, 0.8),
+                1px -1px 2px rgba(0, 0, 0, 0.8),
+                -1px 1px 2px rgba(0, 0, 0, 0.8),
+                1px 1px 2px rgba(0, 0, 0, 0.8);
+            position: absolute;
+            bottom: 8%;
+            left: 5%;
+            z-index: 999;
+            font-size: 1.15rem;
+            font-weight: 600;
+            padding: 14px 24px;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+            transition: opacity 0.3s ease;
+        }
+        
         .chat-transcription-section {
             display: flex;
             flex-direction: column;
             height: 100%;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
         
         .chat-transcription-header {
-            background: rgba(30, 41, 59, 0.8);
-            padding: 12px 16px;
-            border-radius: 12px 12px 0 0;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
-            color: #e0e7ff;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.95);
             font-weight: 600;
-            font-size: 0.95rem;
+            font-size: 1rem;
+            letter-spacing: 0.01em;
         }
         
         #chatHistory {
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            border-top: none;
-            border-radius: 0 0 12px 12px;
+            border: none;
+            border-radius: 0;
             resize: none;
-            background-color: rgba(15, 23, 42, 0.9);
+            background-color: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(10px);
             overflow-y: auto;
             overflow-x: hidden;
-            color: #fff;
-            padding: 20px;
-            font-size: 0.9rem;
-            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.95);
+            padding: 24px;
+            font-size: 0.95rem;
+            line-height: 1.7;
             width: 100%;
             min-height: 400px;
-            max-height: calc(100vh - 450px);
-            font-family: Arial, sans-serif;
+            max-height: calc(100vh - 400px);
+            font-family: 'Inter', sans-serif;
+            transition: background-color 0.3s ease;
+        }
+        
+        #chatHistory:focus {
+            background-color: rgba(15, 23, 42, 0.5);
+            outline: none;
         }
         
         #chatHistory::-webkit-scrollbar {
-            width: 8px;
+            width: 10px;
         }
         
         #chatHistory::-webkit-scrollbar-track {
-            background: rgba(30, 41, 59, 0.6);
-            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
         }
         
         #chatHistory::-webkit-scrollbar-thumb {
             background: rgba(255, 255, 255, 0.2);
-            border-radius: 4px;
+            border-radius: 10px;
+            border: 2px solid rgba(255, 255, 255, 0.05);
         }
         
         #chatHistory::-webkit-scrollbar-thumb:hover {
@@ -367,65 +625,52 @@
         }
         
         #chatHistory:empty::before {
-            content: "Chat transcription will appear here...";
-            color: #94a3b8;
+            content: "Chat conversation will appear here...";
+            color: rgba(255, 255, 255, 0.4);
             font-style: italic;
-        }
-        
-        #subtitles {
-            width: 90%;
-            text-align: center;
-            color: white;
-            text-shadow: -2px -2px 4px #000, 2px -2px 4px #000, -2px 2px 4px #000, 2px 2px 4px #000;
-            position: absolute;
-            bottom: 8%;
-            left: 5%;
-            z-index: 999;
-            font-size: 1.2rem;
-            font-weight: 600;
-            padding: 12px 20px;
-            background: rgba(0, 0, 0, 0.5);
-            border-radius: 8px;
+            font-weight: 400;
         }
         
         .message-input-container {
-            margin-top: 20px;
-            padding: 0;
+            margin-top: 24px;
         }
         
         .message-input-wrapper {
-            max-width: 940px;
-            margin: 0 auto;
             display: flex;
             gap: 12px;
             align-items: center;
-            background: rgba(30, 41, 59, 0.8);
-            border-radius: 12px;
-            padding: 8px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
         
         .message-input-wrapper:focus-within {
-            border-color: #667eea;
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
-            background: rgba(30, 41, 59, 1);
+            border-color: rgba(102, 126, 234, 0.6);
+            box-shadow: 
+                0 0 0 4px rgba(102, 126, 234, 0.15),
+                0 6px 24px rgba(0, 0, 0, 0.15);
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateY(-1px);
         }
         
         #userMessageInput {
             flex: 1;
             padding: 14px 18px;
-            border-radius: 8px;
+            border-radius: 12px;
             border: none;
             background: transparent;
-            color: #fff;
-            font-family: Arial, sans-serif;
+            color: rgba(255, 255, 255, 0.95);
+            font-family: 'Inter', sans-serif;
             font-size: 1rem;
-            transition: all 0.3s ease;
+            font-weight: 400;
         }
         
         #userMessageInput::placeholder {
-            color: rgba(255, 255, 255, 0.5);
+            color: rgba(255, 255, 255, 0.4);
         }
         
         #userMessageInput:focus {
@@ -439,25 +684,24 @@
         
         #sendMessageBtn {
             padding: 14px 24px;
-            border-radius: 8px;
+            border-radius: 12px;
             border: none;
             cursor: pointer;
             font-weight: 600;
-            font-size: 1rem;
-            font-family: Arial, sans-serif;
+            font-size: 0.95rem;
+            font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             display: flex;
             align-items: center;
             gap: 8px;
             white-space: nowrap;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
         }
         
         #sendMessageBtn:hover:not(:disabled) {
-            opacity: 0.9;
-            transform: translateY(-1px);
+            transform: translateY(-2px);
             box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
         }
         
@@ -469,57 +713,77 @@
             opacity: 0.5;
             cursor: not-allowed;
             box-shadow: none;
+            transform: none;
         }
         
-        #sendMessageBtn svg {
-            width: 18px;
-            height: 18px;
+        /* Smooth animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
-        .hidden {
-            display: none;
+        .chat-container {
+            animation: fadeIn 0.5s ease-out;
         }
         
-        .status-indicator {
-            padding: 8px 16px;
-            background: rgba(30, 41, 59, 0.6);
-            border-radius: 8px;
-            margin-top: 15px;
-            text-align: center;
-            font-size: 0.9rem;
-            color: #94a3b8;
+        /* Improved button icons */
+        button svg {
+            transition: transform 0.3s ease;
+        }
+        
+        button:hover:not(:disabled) svg {
+            transform: scale(1.1);
+        }
+        
+        /* Better focus states */
+        *:focus-visible {
+            outline: 2px solid rgba(102, 126, 234, 0.6);
+            outline-offset: 2px;
+            border-radius: 4px;
         }
         
         @media (max-width: 768px) {
+            body {
+                padding: 16px;
+            }
+            
             h1 {
-                font-size: 1.5rem;
+                font-size: 2rem;
+                margin-bottom: 16px;
             }
             
-            .config-panel,
-            #videoContainer {
+            .status-indicator {
+                padding: 14px 20px;
+                font-size: 0.9rem;
+            }
+            
+            .chat-container {
                 padding: 20px;
-            }
-            
-            #videoContainer {
                 grid-template-columns: 1fr;
-                gap: 20px;
-            }
-            
-            .section-content {
-                grid-template-columns: 1fr;
+                gap: 24px;
+                border-radius: 20px;
             }
             
             .button-group {
                 flex-direction: column;
+                gap: 10px;
             }
             
             button {
                 width: 100%;
+                padding: 14px 24px;
             }
             
             .message-input-wrapper {
                 flex-direction: column;
                 gap: 10px;
+                padding: 8px;
             }
             
             #sendMessageBtn {
@@ -527,37 +791,83 @@
                 justify-content: center;
             }
             
-            #userMessageInput {
-                width: 100%;
-            }
-            
             #chatHistory {
                 max-height: 300px;
                 min-height: 300px;
+                padding: 20px;
+            }
+            
+            #remoteVideo {
+                border-radius: 16px;
+            }
+            
+            .video-container {
+                flex-direction: column;
+            }
+            
+            .engagement-bar-container {
+                flex-direction: row;
+                width: 100%;
+                min-width: auto;
+                padding: 8px 16px;
+            }
+            
+            .engagement-bar-wrapper {
+                width: 100%;
+                height: 24px;
+                max-width: 400px;
+            }
+            
+            .engagement-bar-label {
+                writing-mode: horizontal-tb;
+                text-orientation: mixed;
+                margin-bottom: 0;
+                margin-right: 8px;
+            }
+            
+            .engagement-bar-value {
+                transform: translate(-50%, -50%);
+                transform-origin: center;
+            }
+            
+            .engagement-level-indicator {
+                margin-top: 0;
+                margin-left: 8px;
             }
         }
     </style>
 </head>
 <body>
     <div class="main-container">
-        <h1>Talking Avatar Chat Demo</h1>
+        <h1>Business Meeting Copilot</h1>
 
         <div class="status-indicator">
-            <p>Configuration is managed by the backend. Click "Open Avatar Session" to start.</p>
+            <p>AI-powered meeting coach with speech recognition and talking avatar. Click "Initialize Avatar Session" to start, then "Start Microphone" for voice interaction.</p>
         </div>
 
         <div class="button-group">
-            <button id="startSession" onclick="startSession()">Open Avatar Session</button>
+            <button id="initAvatar" onclick="initializeAvatarSession()">Initialize Avatar Session</button>
+            <button id="selectVideoSource" onclick="promptVideoSourceSelection(true)" class="secondary" style="display: none;">Change Video Source</button>
             <button id="microphone" onclick="microphone()" disabled>Start Microphone</button>
             <button id="stopSpeaking" onclick="stopSpeaking()" disabled>Stop Speaking</button>
             <button id="clearChatHistory" onclick="clearChatHistory()" class="secondary">Clear Chat History</button>
             <button id="stopSession" onclick="stopSession()" disabled class="danger">Close Avatar Session</button>
         </div>
 
-        <div id="videoContainer">
+        <div class="chat-container">
             <div class="video-section">
-                <div id="remoteVideo" style="position: relative;">
-                    <div id="subtitles" hidden></div>
+                <div class="video-container">
+                    <div class="engagement-bar-container">
+                        <div class="engagement-bar-label">Engagement</div>
+                        <div class="engagement-bar-wrapper">
+                            <div class="engagement-bar-fill" id="engagementBarFill"></div>
+                            <div class="engagement-bar-value" id="engagementBarValue">--</div>
+                        </div>
+                        <div class="engagement-level-indicator" id="engagementLevel">--</div>
+                    </div>
+                    <div id="remoteVideo" style="position: relative; flex: 1;">
+                        <div id="subtitles" hidden></div>
+                    </div>
                 </div>
                 
                 <div class="message-input-container">
@@ -565,7 +875,7 @@
                         <input 
                             type="text" 
                             id="userMessageInput" 
-                            placeholder="Type your message here..." 
+                            placeholder="Type your message here or use microphone..." 
                             disabled
                             onkeypress="handleMessageKeyPress(event)"
                         />
@@ -581,34 +891,188 @@
             </div>
             
             <div class="chat-transcription-section">
-                <div class="chat-transcription-header">Chat Transcription</div>
+                <div class="chat-transcription-header">Chat Conversation</div>
                 <div id="chatHistory" contentEditable="true"></div>
             </div>
         </div>
     </div>
 
+    <!-- Modular JavaScript Modules -->
+    <script src="/static/js/engagement-bar.js"></script>
+    <script src="/static/js/engagement-detector.js"></script>
+    <script src="/static/js/session-manager.js"></script>
+    <script src="/static/js/avatar-chat-manager.js"></script>
+    <script src="/static/js/video-source-selector.js"></script>
+
     <script>
-        // Global variables
+        // ========================================================================
+        // Global Variables & Configuration
+        // ========================================================================
         var speechRecognizer
         var avatarSynthesizer
         var peerConnection
         var peerConnectionDataChannel
-        var messages = []
-        var messageInitiated = false
-        var dataSources = []
-        var sentenceLevelPunctuations = [ '.', '?', '!', ':', ';', '。', '？', '！', '：', '；' ]
-        var enableDisplayTextAlignmentWithSpeech = true
-        var isSpeaking = false
-        var isReconnecting = false
-        var speakingText = ""
-        var spokenTextQueue = []
-        var repeatSpeakingSentenceAfterReconnection = true
-        var sessionActive = false
-        var userClosedSession = false
-        var lastInteractionTime = new Date()
-        var lastSpeakTime
-        var imgUrl = ""
         var appConfig = null
+        
+        // Session Management (modular)
+        var sessionManager = null
+        var avatarChatManager = null
+        var engagementBarDisplay = null
+        var engagementDetector = null
+        var videoSourceSelector = null
+        
+        // UI State
+        var avatarAudioInitialized = false
+        var sessionActive = false
+        var dataSources = []
+        var videoSourcePromptShown = false  // Track if video source prompt has been shown
+
+        // ========================================================================
+        // System Initialization
+        // ========================================================================
+        
+        /**
+         * Initialize all systems (engagement detection, session manager).
+         * Avatar chat manager is initialized when avatar session starts.
+         */
+        function initializeSystems() {
+            try {
+                // Initialize engagement bar display
+                engagementBarDisplay = new EngagementBarDisplay({
+                    averagingWindow: 10,
+                    updateInterval: 500
+                });
+                
+                // Initialize engagement detector
+                engagementDetector = new EngagementDetector({
+                    barDisplay: engagementBarDisplay,
+                    apiBaseUrl: 'http://localhost:5000',
+                    pollInterval: 500
+                });
+                
+                // Initialize session manager
+                sessionManager = new SessionManager({
+                    engagementDetector: engagementDetector,
+                    apiBaseUrl: 'http://localhost:5000'
+                });
+                
+                // Initialize video source selector
+                videoSourceSelector = new VideoSourceSelector({
+                    onSelect: handleVideoSourceSelected,
+                    onCancel: handleVideoSourceCanceled
+                });
+                
+                // Show "Change Video Source" button after initialization
+                const changeSourceBtn = document.getElementById('selectVideoSource');
+                if (changeSourceBtn) {
+                    changeSourceBtn.style.display = 'inline-block';
+                }
+                
+                console.log('Core systems initialized (engagement + session manager + video source selector)');
+            } catch (error) {
+                console.error('Error initializing systems:', error);
+            }
+        }
+        
+        // ========================================================================
+        // Video Source Selection
+        // ========================================================================
+        
+        /**
+         * Prompt user to select video source for engagement detection.
+         * 
+         * @param {boolean} force - Force show even if already shown (default: false)
+         */
+        function promptVideoSourceSelection(force = false) {
+            // Don't show if already shown (unless forced)
+            if (videoSourcePromptShown && !force) {
+                return;
+            }
+            
+            if (!videoSourceSelector) {
+                console.warn('Video source selector not initialized');
+                // Fallback to default (stream) if systems are ready
+                if (sessionManager) {
+                    sessionManager.startSession('stream', null, null).catch(err => {
+                        console.warn('Could not start parallel session:', err);
+                    });
+                }
+                return;
+            }
+            
+            videoSourceSelector.show();
+            videoSourcePromptShown = true;
+        }
+        
+        /**
+         * Handle video source selection.
+         * 
+         * @param {Object} selection - Selected video source options
+         */
+        async function handleVideoSourceSelected(selection) {
+            const { sourceType, sourcePath, file } = selection;
+            
+            try {
+                // If file is selected, upload it first
+                let finalSourcePath = sourcePath;
+                
+                if (sourceType === 'file' && file) {
+                    // Show loading indicator
+                    const confirmBtn = document.querySelector('#confirmVideoSource');
+                    const originalText = confirmBtn.textContent;
+                    confirmBtn.textContent = 'Uploading...';
+                    confirmBtn.disabled = true;
+                    
+                    try {
+                        // Upload file to server
+                        const formData = new FormData();
+                        formData.append('video', file);
+                        
+                        const uploadResponse = await fetch('http://localhost:5000/engagement/upload-video', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        if (!uploadResponse.ok) {
+                            const errorData = await uploadResponse.json().catch(() => ({ error: 'Upload failed' }));
+                            throw new Error(errorData.error || 'Failed to upload video file');
+                        }
+                        
+                        const uploadResult = await uploadResponse.json();
+                        finalSourcePath = uploadResult.filePath;
+                    } finally {
+                        confirmBtn.textContent = originalText;
+                        confirmBtn.disabled = false;
+                    }
+                }
+                
+                // Start session with selected source
+                // Note: This starts engagement detection, but avatar session is separate
+                if (sessionManager) {
+                    await sessionManager.startSession(sourceType, finalSourcePath, null);
+                    console.log(`Engagement detection started with source: ${sourceType}`);
+                    
+                    // Show success message
+                    console.log('✓ Video source selected and engagement detection started');
+                }
+            } catch (error) {
+                console.error('Error starting engagement detection with selected source:', error);
+                alert(`Failed to start engagement detection: ${error.message}\n\nPlease try again or select a different source.`);
+            }
+        }
+        
+        /**
+         * Handle video source selection cancellation.
+         */
+        function handleVideoSourceCanceled() {
+            console.log('Video source selection canceled');
+            // Mark as shown so it doesn't pop up again automatically
+            videoSourcePromptShown = true;
+            
+            // Optionally start with default (webcam) if user cancels
+            // Or leave it so user can manually start later
+            // For now, we'll just mark it as shown and let user start manually
+        }
 
         // Configuration from backend
         async function loadConfig() {
@@ -625,61 +1089,8 @@
             }
         }
 
-        // HTML encoding
-        function htmlEncode(text) {
-            const entityMap = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#39;',
-                '/': '&#x2F;'
-            }
-            return String(text).replace(/[&<>"'\/]/g, (match) => entityMap[match])
-        }
-
-        // Initialize messages
-        function initMessages() {
-            messages = []
-            if (!appConfig) {
-                console.error('Configuration not loaded')
-                return
-            }
-            
-            let systemPrompt = appConfig.systemPrompt
-            let systemMessage = {
-                role: 'system',
-                content: systemPrompt
-            }
-            messages.push(systemMessage)
-            
-            if (appConfig.cognitiveSearch && appConfig.cognitiveSearch.enabled) {
-                dataSources = [{
-                    type: 'AzureCognitiveSearch',
-                    parameters: {
-                        endpoint: appConfig.cognitiveSearch.endpoint,
-                        key: appConfig.cognitiveSearch.apiKey,
-                        indexName: appConfig.cognitiveSearch.indexName,
-                        semanticConfiguration: '',
-                        queryType: 'simple',
-                        fieldsMapping: {
-                            contentFieldsSeparator: '\n',
-                            contentFields: ['content'],
-                            filepathField: null,
-                            titleField: 'title',
-                            urlField: null
-                        },
-                        inScope: true,
-                        roleInformation: systemPrompt
-                    }
-                }]
-            } else {
-                dataSources = []
-            }
-        }
-
-        // Connect to avatar service
-        async function connectAvatar() {
+        // Initialize avatar session with video and audio
+        async function initializeAvatarSession() {
             if (!appConfig) {
                 await loadConfig()
             }
@@ -700,6 +1111,7 @@
             }
             const { token } = await tokenRes.json()
 
+            // Initialize Avatar Synthesizer for TTS
             let speechSynthesisConfig
             const isCustomAvatar = appConfig.avatar.customized
             const isCustomVoice = appConfig.sttTts.customVoiceEndpointId && appConfig.sttTts.customVoiceEndpointId !== ''
@@ -729,9 +1141,10 @@
                 if (e.offset === 0) {
                     offsetMessage = ""
                 }
-                console.log("Event received: " + e.description + offsetMessage)
+                console.log("Avatar event received: " + e.description + offsetMessage)
             }
 
+            // Initialize Speech Recognizer for STT
             let speechRecognitionConfig
             if (privateEndpointEnabled) {
                 const privateEndpoint = appConfig.speech.privateEndpoint || ''
@@ -740,7 +1153,6 @@
                     token
                 )
             } else {
-                // Use fromAuthorizationToken for public Azure Speech Service
                 speechRecognitionConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, cogSvcRegion)
             }
             speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, "Continuous")
@@ -752,30 +1164,28 @@
                 SpeechSDK.AudioConfig.fromDefaultMicrophoneInput()
             )
 
-            // Only initialize messages once
-            if (!messageInitiated) {
-                initMessages()
-                messageInitiated = true
+            // Initialize messages
+            // Messages are initialized by avatarChatManager when ready
+            // Fallback initialization if chat manager not ready yet
+            if (!avatarChatManager && appConfig) {
+                initMessages();
             }
 
-            document.getElementById('startSession').disabled = true
-
-            // Get relay token from backend
+            // Get relay token and set up WebRTC for avatar audio
             const relayRes = await fetch('http://localhost:5000/avatar/relay-token')
             if (!relayRes.ok) {
                 alert('Failed to get relay token from backend.')
-                document.getElementById('startSession').disabled = false
                 return
             }
             const relayData = await relayRes.json()
             const iceServerUrl = relayData.Urls[0]
             const iceServerUsername = relayData.Username
             const iceServerCredential = relayData.Password
-            setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential)
+            setupWebRTCForAudio(iceServerUrl, iceServerUsername, iceServerCredential)
         }
 
-        // Setup WebRTC
-        function setupWebRTC(iceServerUrl, iceServerUsername, iceServerCredential) {
+        // Setup WebRTC connection for avatar video and audio
+        function setupWebRTCForAudio(iceServerUrl, iceServerUsername, iceServerCredential) {
             peerConnection = new RTCPeerConnection({
                 iceServers: [{
                     urls: [iceServerUrl],
@@ -784,6 +1194,7 @@
                 }]
             })
 
+            // Handle audio and video tracks from avatar
             peerConnection.ontrack = function (event) {
                 if (event.track.kind === 'audio') {
                     let audioElement = document.createElement('audio')
@@ -798,8 +1209,9 @@
                     }
 
                     let remoteVideoDiv = document.getElementById('remoteVideo')
+                    // Remove existing audio element if present
                     for (var i = 0; i < remoteVideoDiv.childNodes.length; i++) {
-                        if (remoteVideoDiv.childNodes[i].localName === event.track.kind) {
+                        if (remoteVideoDiv.childNodes[i].localName === 'audio') {
                             remoteVideoDiv.removeChild(remoteVideoDiv.childNodes[i])
                         }
                     }
@@ -818,83 +1230,83 @@
                     videoElement.style.width = '0.5px'
                     document.getElementById('remoteVideo').appendChild(videoElement)
 
-                    if (repeatSpeakingSentenceAfterReconnection) {
-                        if (speakingText !== '') {
-                            speakNext(speakingText, 0, true)
-                        }
-                    } else {
-                        if (spokenTextQueue.length > 0) {
-                            speakNext(spokenTextQueue.shift())
-                        }
-                    }
-
                     videoElement.onplaying = () => {
                         let remoteVideoDiv = document.getElementById('remoteVideo')
+                        // Remove existing video element if present
                         for (var i = 0; i < remoteVideoDiv.childNodes.length; i++) {
-                            if (remoteVideoDiv.childNodes[i].localName === event.track.kind) {
+                            if (remoteVideoDiv.childNodes[i].localName === 'video') {
                                 remoteVideoDiv.removeChild(remoteVideoDiv.childNodes[i])
                             }
                         }
-                    videoElement.style.width = '100%'
-                    document.getElementById('remoteVideo').appendChild(videoElement)
+                        videoElement.style.width = '100%'
+                        document.getElementById('remoteVideo').appendChild(videoElement)
 
-                    console.log(`WebRTC ${event.track.kind} channel connected.`)
-                    document.getElementById('microphone').disabled = false
-                    document.getElementById('stopSession').disabled = false
-                    document.getElementById('userMessageInput').disabled = false
-                    document.getElementById('sendMessageBtn').disabled = false
-                    document.getElementById('userMessageInput').focus()
-
-                    if (lastSpeakTime === undefined) {
-                        lastSpeakTime = new Date()
-                    }
-
-                    isReconnecting = false
-                    setTimeout(() => { sessionActive = true }, 5000)
+                        console.log(`WebRTC ${event.track.kind} channel connected.`)
+                        avatarAudioInitialized = true
+                        sessionActive = true
+                        document.getElementById('initAvatar').disabled = true
+                        document.getElementById('microphone').disabled = false
+                        document.getElementById('stopSession').disabled = false
+                        document.getElementById('userMessageInput').disabled = false
+                        document.getElementById('sendMessageBtn').disabled = false
+                        document.getElementById('userMessageInput').focus()
+                        
+                        // Video source should already be selected from initial prompt
+                        // Only prompt again if it wasn't shown initially
+                        if (!videoSourcePromptShown && videoSourceSelector) {
+                            promptVideoSourceSelection();
+                        }
                     }
                 }
             }
 
+            // Handle data channel for avatar events (subtitles, etc.)
             peerConnection.addEventListener("datachannel", event => {
                 peerConnectionDataChannel = event.channel
-                peerConnectionDataChannel.onmessage = e => {
-                    let subtitles = document.getElementById('subtitles')
-                    const webRTCEvent = JSON.parse(e.data)
-                    if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && appConfig.avatar.showSubtitles) {
-                        subtitles.hidden = false
-                        subtitles.innerHTML = speakingText
-                    } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
-                        subtitles.hidden = true
-                        if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END') {
-                            if (appConfig.avatar.autoReconnect && !userClosedSession && !isReconnecting) {
-                                if (new Date() - lastInteractionTime < 300000) {
-                                    console.log(`[${(new Date()).toISOString()}] The WebSockets got disconnected, need reconnect.`)
-                                    isReconnecting = true
-                                    peerConnectionDataChannel.onmessage = null
-                                    if (avatarSynthesizer !== undefined) {
-                                        avatarSynthesizer.close()
-                                    }
-                                    connectAvatar()
-                                }
-                            }
-                        }
+            peerConnectionDataChannel.onmessage = e => {
+                let subtitles = document.getElementById('subtitles')
+                const webRTCEvent = JSON.parse(e.data)
+                if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && appConfig.avatar.showSubtitles) {
+                    subtitles.hidden = false
+                    // Get current speaking text from avatar chat manager if available
+                    if (avatarChatManager && avatarChatManager.speakingText) {
+                        subtitles.innerHTML = avatarChatManager.speakingText
                     }
-                    console.log("[" + (new Date()).toISOString() + "] WebRTC event received: " + e.data)
+                } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
+                    subtitles.hidden = true
                 }
+                console.log("[" + (new Date()).toISOString() + "] WebRTC event received: " + e.data)
+            }
             })
 
+            // Create data channel for events
             let c = peerConnection.createDataChannel("eventChannel")
 
             peerConnection.oniceconnectionstatechange = e => {
                 console.log("WebRTC status: " + peerConnection.iceConnectionState)
             }
 
+            // Add transceivers for both audio and video
             peerConnection.addTransceiver('video', { direction: 'sendrecv' })
             peerConnection.addTransceiver('audio', { direction: 'sendrecv' })
 
+            // Start avatar synthesizer
             avatarSynthesizer.startAvatarAsync(peerConnection).then((r) => {
                 if (r.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
                     console.log("[" + (new Date()).toISOString() + "] Avatar started. Result ID: " + r.resultId)
+                    
+                    // Initialize avatar chat manager now that avatar is ready
+                    if (sessionManager && !avatarChatManager) {
+                        avatarChatManager = new AvatarChatManager({
+                            sessionManager: sessionManager,
+                            avatarSynthesizer: avatarSynthesizer,
+                            appConfig: appConfig
+                        });
+                        console.log('Avatar chat manager initialized');
+                    }
+                    
+                    avatarAudioInitialized = true;
+                    sessionActive = true;
                 } else {
                     console.log("[" + (new Date()).toISOString() + "] Unable to start avatar. Result ID: " + r.resultId)
                     if (r.reason === SpeechSDK.ResultReason.Canceled) {
@@ -904,287 +1316,200 @@
                         }
                         console.log("Unable to start avatar: " + cancellationDetails.errorDetails)
                     }
-                    document.getElementById('startSession').disabled = false
+                    document.getElementById('initAvatar').disabled = false
                 }
             }).catch((error) => {
                 console.log("[" + (new Date()).toISOString() + "] Avatar failed to start. Error: " + error)
-                document.getElementById('startSession').disabled = false
+                alert("Failed to initialize avatar session: " + error)
+                document.getElementById('initAvatar').disabled = false
             })
         }
-
-        // Disconnect from avatar service
-        function disconnectAvatar() {
-            if (avatarSynthesizer !== undefined) {
-                avatarSynthesizer.close()
-            }
-            if (speechRecognizer !== undefined) {
-                speechRecognizer.stopContinuousRecognitionAsync()
-                speechRecognizer.close()
-            }
-            sessionActive = false
-        }
-
-        // Speak text
-        function speak(text, endingSilenceMs = 0) {
-            if (isSpeaking) {
-                spokenTextQueue.push(text)
-                return
-            }
-            speakNext(text, endingSilenceMs)
-        }
-
-        function speakNext(text, endingSilenceMs = 0, skipUpdatingChatHistory = false) {
-            if (!appConfig) {
-                console.error('Configuration not loaded')
-                return
-            }
-            let ttsVoice = appConfig.sttTts.ttsVoice
-            let ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'><voice name='${ttsVoice}'><mstts:leadingsilence-exact value='0'/>${htmlEncode(text)}</voice></speak>`
-            if (endingSilenceMs > 0) {
-                ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='http://www.w3.org/2001/mstts' xml:lang='en-US'><voice name='${ttsVoice}'><mstts:leadingsilence-exact value='0'/>${htmlEncode(text)}<break time='${endingSilenceMs}ms' /></voice></speak>`
-            }
-
-            if (enableDisplayTextAlignmentWithSpeech && !skipUpdatingChatHistory) {
-                let chatHistoryTextArea = document.getElementById('chatHistory')
-                chatHistoryTextArea.innerHTML += text.replace(/\n/g, '<br/>')
-                chatHistoryTextArea.scrollTop = chatHistoryTextArea.scrollHeight
-            }
-
-            lastSpeakTime = new Date()
-            isSpeaking = true
-            speakingText = text
-            document.getElementById('stopSpeaking').disabled = false
-            avatarSynthesizer.speakSsmlAsync(ssml).then((result) => {
-                if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-                    console.log(`Speech synthesized to speaker for text [ ${text} ]. Result ID: ${result.resultId}`)
-                    lastSpeakTime = new Date()
-                } else {
-                    console.log(`Error occurred while speaking the SSML. Result ID: ${result.resultId}`)
-                }
-
-                speakingText = ''
-                if (spokenTextQueue.length > 0) {
-                    speakNext(spokenTextQueue.shift())
-                } else {
-                    isSpeaking = false
-                    document.getElementById('stopSpeaking').disabled = true
-                }
-            }).catch((error) => {
-                console.log(`Error occurred while speaking the SSML: [ ${error} ]`)
-                speakingText = ''
-                if (spokenTextQueue.length > 0) {
-                    speakNext(spokenTextQueue.shift())
-                } else {
-                    isSpeaking = false
-                    document.getElementById('stopSpeaking').disabled = true
-                }
-            })
-        }
-
-        function stopSpeaking() {
-            lastInteractionTime = new Date()
-            spokenTextQueue = []
-            avatarSynthesizer.stopSpeakingAsync().then(() => {
-                isSpeaking = false
-                document.getElementById('stopSpeaking').disabled = true
-                console.log("[" + (new Date()).toISOString() + "] Stop speaking request sent.")
-            }).catch((error) => {
-                console.log("Error occurred while stopping speaking: " + error)
-            })
-        }
-
-        // Handle user query using backend chat endpoint
-        async function handleUserQuery(userQuery, userQueryHTML, imgUrlPath) {
-            lastInteractionTime = new Date()
-            let contentMessage = userQuery
-            if (imgUrlPath.trim()) {
-                contentMessage = [
-                    { "type": "text", "text": userQuery },
-                    { "type": "image_url", "image_url": { "url": imgUrlPath } }
-                ]
-            }
-            let chatMessage = {
-                role: 'user',
-                content: contentMessage
-            }
-
-            messages.push(chatMessage)
-            let chatHistoryTextArea = document.getElementById('chatHistory')
-            if (chatHistoryTextArea.innerHTML !== '' && !chatHistoryTextArea.innerHTML.endsWith('\n\n')) {
-                chatHistoryTextArea.innerHTML += '\n\n'
-            }
-
-            chatHistoryTextArea.innerHTML += imgUrlPath.trim() ? "<br/><br/>User: " + userQueryHTML : "<br/><br/>User: " + userQuery + "<br/>"
-            chatHistoryTextArea.scrollTop = chatHistoryTextArea.scrollHeight
-
-            if (isSpeaking) {
-                stopSpeaking()
-            }
-
-            if (!appConfig) {
-                console.error('Configuration not loaded')
-                return
+        
+        // ========================================================================
+        // Session Management
+        // ========================================================================
+        
+        /**
+         * Stop avatar session and clean up all resources.
+         */
+        async function stopSession() {
+            // Stop parallel session (engagement detection + chat)
+            if (sessionManager) {
+                await sessionManager.stopSession();
             }
             
-            const enableOyd = appConfig.cognitiveSearch && appConfig.cognitiveSearch.enabled
-            const systemPrompt = appConfig.systemPrompt
-
-            let url = 'http://localhost:5000/chat/stream'
-            let body = JSON.stringify({
-                messages: messages,
-                enableOyd: enableOyd,
-                systemPrompt: systemPrompt
-            })
-
-            let assistantReply = ''
-            let toolContent = ''
-            let spokenSentence = ''
-            let displaySentence = ''
-
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: body
-                })
-
-                if (!response.ok) {
-                    throw new Error(`Chat API response status: ${response.status} ${response.statusText}`)
-                }
-
-                let chatHistoryTextArea = document.getElementById('chatHistory')
-                chatHistoryTextArea.innerHTML += imgUrlPath.trim() ? 'Assistant: ' : '<br/>Assistant: '
-
-                const reader = response.body.getReader()
-                const decoder = new TextDecoder()
-
-                function read(previousChunkString = '') {
-                    return reader.read().then(({ value, done }) => {
-                        if (done) {
-                            if (spokenSentence !== '') {
-                                speak(spokenSentence)
-                                spokenSentence = ''
-                            }
-                            
-                            if (toolContent) {
-                                let toolMessage = { role: 'tool', content: toolContent }
-                                messages.push(toolMessage)
-                            }
-                            
-                            let assistantMessage = { role: 'assistant', content: assistantReply }
-                            messages.push(assistantMessage)
-                            return
-                        }
-
-                        let chunkString = decoder.decode(value, { stream: true })
-                        if (previousChunkString !== '') {
-                            chunkString = previousChunkString + chunkString
-                        }
-
-                        if (!chunkString.endsWith('}\n\n') && !chunkString.endsWith('[DONE]\n\n')) {
-                            return read(chunkString)
-                        }
-
-                        chunkString.split('\n\n').forEach((line) => {
-                            try {
-                                if (line.startsWith('data:') && !line.endsWith('[DONE]')) {
-                                    const responseJson = JSON.parse(line.substring(5).trim())
-                                    let responseToken = undefined
-                                    if (!enableOyd || !appConfig.cognitiveSearch || !appConfig.cognitiveSearch.enabled) {
-                                        responseToken = responseJson.choices[0].delta.content
-                                    } else {
-                                        let role = responseJson.choices[0].messages[0].delta.role
-                                        if (role === 'tool') {
-                                            toolContent = responseJson.choices[0].messages[0].delta.content
-                                        } else {
-                                            responseToken = responseJson.choices[0].messages[0].delta.content
-                                        }
-                                    }
-
-                                    if (responseToken !== undefined && responseToken !== null) {
-                                        assistantReply += responseToken
-                                        displaySentence += responseToken
-
-                                        if (responseToken === '\n' || responseToken === '\n\n') {
-                                            spokenSentence += responseToken
-                                            speak(spokenSentence)
-                                            spokenSentence = ''
-                                        } else {
-                                            spokenSentence += responseToken
-                                            responseToken = responseToken.replace(/\n/g, '')
-                                            if (responseToken.length === 1 || responseToken.length === 2) {
-                                                for (let i = 0; i < sentenceLevelPunctuations.length; ++i) {
-                                                    let sentenceLevelPunctuation = sentenceLevelPunctuations[i]
-                                                    if (responseToken.startsWith(sentenceLevelPunctuation)) {
-                                                        speak(spokenSentence)
-                                                        spokenSentence = ''
-                                                        break
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } catch (error) {
-                                console.log(`Error occurred while parsing the response: ${error}`)
-                                console.log(chunkString)
-                            }
-                        })
-
-                        if (!enableDisplayTextAlignmentWithSpeech) {
-                            chatHistoryTextArea.innerHTML += displaySentence.replace(/\n/g, '<br/>')
-                            chatHistoryTextArea.scrollTop = chatHistoryTextArea.scrollHeight
-                            displaySentence = ''
-                        }
-
-                        return read()
-                    })
-                }
-
-                return read()
-            } catch (error) {
-                console.error('Error in handleUserQuery:', error)
-                chatHistoryTextArea.innerHTML += '<br/>Error: ' + error.message
+            // Stop avatar synthesizer
+            if (avatarSynthesizer !== undefined) {
+                avatarSynthesizer.close();
             }
+            
+            // Stop speech recognizer
+            if (speechRecognizer !== undefined) {
+                speechRecognizer.stopContinuousRecognitionAsync();
+                speechRecognizer.close();
+            }
+            
+            // Close peer connection
+            if (peerConnection) {
+                peerConnection.close();
+            }
+            
+            // Update state
+            sessionActive = false;
+            avatarAudioInitialized = false;
+            
+            // Clear video element
+            let remoteVideoDiv = document.getElementById('remoteVideo');
+            while (remoteVideoDiv.firstChild) {
+                if (remoteVideoDiv.firstChild.id !== 'subtitles') {
+                    remoteVideoDiv.removeChild(remoteVideoDiv.firstChild);
+                }
+            }
+            
+            // Update UI
+            document.getElementById('initAvatar').disabled = false;
+            document.getElementById('microphone').disabled = true;
+            document.getElementById('stopSession').disabled = true;
+            document.getElementById('userMessageInput').disabled = true;
+            document.getElementById('userMessageInput').value = '';
+            document.getElementById('sendMessageBtn').disabled = true;
+            document.getElementById('stopSpeaking').disabled = true;
         }
 
-        // Session management
-        function startSession() {
-            lastInteractionTime = new Date()
+        // HTML encoding
+        function htmlEncode(text) {
+            const entityMap = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;',
+                '/': '&#x2F;'
+            }
+            return String(text).replace(/[&<>"'\/]/g, (match) => entityMap[match])
+        }
+
+        // ========================================================================
+        // Message Management
+        // ========================================================================
+        
+        /**
+         * Initialize messages array.
+         */
+        function initMessages() {
+            if (avatarChatManager) {
+                avatarChatManager.initMessages();
+            }
+            
+            // Initialize data sources for cognitive search
             if (!appConfig) {
-                alert('Configuration not loaded. Please wait a moment and try again.')
+                console.error('Configuration not loaded');
+                return;
+            }
+            
+            if (appConfig.cognitiveSearch && appConfig.cognitiveSearch.enabled) {
+                dataSources = [{
+                    type: 'AzureCognitiveSearch',
+                    parameters: {
+                        endpoint: appConfig.cognitiveSearch.endpoint,
+                        key: appConfig.cognitiveSearch.apiKey,
+                        indexName: appConfig.cognitiveSearch.indexName,
+                        semanticConfiguration: '',
+                        queryType: 'simple',
+                        fieldsMapping: {
+                            contentFieldsSeparator: '\n',
+                            contentFields: ['content'],
+                            filepathField: null,
+                            titleField: 'title',
+                            urlField: null
+                        },
+                        inScope: true,
+                        roleInformation: appConfig.systemPrompt
+                    }
+                }];
+            } else {
+                dataSources = [];
+            }
+        }
+        
+        /**
+         * Clear chat history.
+         */
+        function clearChatHistory() {
+            if (avatarChatManager) {
+                avatarChatManager.clearChatHistory();
+            }
+            initMessages();
+        }
+
+        // ========================================================================
+        // Speech Functions (Delegated to AvatarChatManager)
+        // ========================================================================
+        
+        // ========================================================================
+        // Speech Functions (Delegated to AvatarChatManager)
+        // ========================================================================
+        
+        // ========================================================================
+        // Speech Functions (Delegated to AvatarChatManager)
+        // ========================================================================
+        
+        /**
+         * Speak text - delegates to AvatarChatManager.
+         * Kept for backward compatibility with existing code.
+         */
+        function speak(text, endingSilenceMs = 0) {
+            if (avatarChatManager) {
+                avatarChatManager.speak(text, endingSilenceMs);
+            }
+        }
+        
+        /**
+         * Stop speaking - delegates to AvatarChatManager.
+         * Kept for backward compatibility with existing code.
+         */
+        function stopSpeaking() {
+            if (avatarChatManager) {
+                avatarChatManager.stopSpeaking();
+            }
+        }
+        
+        // Expose isSpeaking for UI updates (delegates to AvatarChatManager)
+        // This allows existing code that checks isSpeaking to continue working
+        Object.defineProperty(window, 'isSpeaking', {
+            get: function() {
+                return avatarChatManager ? avatarChatManager.isSpeaking : false;
+            },
+            configurable: true
+        });
+
+        // ========================================================================
+        // Chat Handling (Streamlined)
+        // ========================================================================
+        
+        /**
+         * Handle user query - streamlined version using AvatarChatManager.
+         * 
+         * @param {string} userQuery - User's message
+         * @param {string} userQueryHTML - HTML formatted user query
+         * @param {string} imgUrlPath - Optional image URL path
+         */
+        async function handleUserQuery(userQuery, userQueryHTML, imgUrlPath) {
+            if (!avatarChatManager) {
+                console.error('Avatar chat manager not initialized');
+                return;
+            }
+            
+            await avatarChatManager.handleUserQuery(userQuery, userQueryHTML, imgUrlPath);
+        }
+
+
+        function microphone() {
+            if (!speechRecognizer || !avatarAudioInitialized || !sessionActive) {
+                alert('Please initialize avatar session first, then start microphone.')
                 return
             }
 
-            userClosedSession = false
-            connectAvatar()
-        }
-
-        function stopSession() {
-            lastInteractionTime = new Date()
-            document.getElementById('startSession').disabled = false
-            document.getElementById('microphone').disabled = true
-            document.getElementById('stopSession').disabled = true
-            document.getElementById('userMessageInput').disabled = true
-            document.getElementById('userMessageInput').value = ''
-            document.getElementById('sendMessageBtn').disabled = true
-
-            userClosedSession = true
-            disconnectAvatar()
-            messageInitiated = false
-        }
-
-        function clearChatHistory() {
-            lastInteractionTime = new Date()
-            document.getElementById('chatHistory').innerHTML = ''
-            initMessages()
-            messageInitiated = true
-        }
-
-        function microphone() {
-            lastInteractionTime = new Date()
             if (document.getElementById('microphone').innerHTML === 'Stop Microphone') {
                 document.getElementById('microphone').disabled = true
                 speechRecognizer.stopContinuousRecognitionAsync(() => {
@@ -1197,13 +1522,18 @@
                 return
             }
 
-            document.getElementById('audioPlayer').play()
             document.getElementById('microphone').disabled = true
             speechRecognizer.recognized = async (s, e) => {
                 if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
                     let userQuery = e.result.text.trim()
                     if (userQuery === '') {
                         return
+                    }
+
+                    // Interrupt avatar chat if speaking
+                    if (avatarChatManager) {
+                        avatarChatManager.interruptCurrentResponse();
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
 
                     if (!appConfig || !appConfig.sttTts || !appConfig.sttTts.continuousConversation) {
@@ -1238,7 +1568,7 @@
             }
         }
         
-        function sendMessage() {
+        async function sendMessage() {
             const input = document.getElementById('userMessageInput')
             const sendBtn = document.getElementById('sendMessageBtn')
             const message = input.value.trim()
@@ -1252,10 +1582,15 @@
                 return
             }
             
-            if (!avatarSynthesizer || !sessionActive) {
-                alert('Please start an avatar session first.')
-                input.focus()
+            if (!avatarAudioInitialized || !sessionActive) {
+                alert('Please initialize avatar session first.')
                 return
+            }
+            
+            // Interrupt avatar chat if speaking
+            if (avatarChatManager) {
+                avatarChatManager.interruptCurrentResponse();
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
             
             // Disable input and button while processing
@@ -1270,49 +1605,54 @@
             
             // Re-enable input and button after a brief moment
             setTimeout(() => {
-                if (sessionActive && avatarSynthesizer) {
-                    input.disabled = false
-                    sendBtn.disabled = false
-                    input.focus()
-                }
+                input.disabled = false
+                sendBtn.disabled = false
+                input.focus()
             }, 300)
         }
 
-
-        // Session monitoring
-        function checkHung() {
-            let videoElement = document.getElementById('videoPlayer')
-            if (videoElement !== null && videoElement !== undefined && sessionActive) {
-                let videoTime = videoElement.currentTime
+        // ========================================================================
+        // Initialization
+        // ========================================================================
+        
+        // Initialize systems when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                initializeSystems();
+                // Show video source prompt after systems are initialized
                 setTimeout(() => {
-                    if (videoElement.currentTime === videoTime) {
-                        if (sessionActive) {
-                            sessionActive = false
-                            if (appConfig.avatar.autoReconnect) {
-                                if (new Date() - lastInteractionTime < 300000) {
-                                    console.log(`[${(new Date()).toISOString()}] The video stream got disconnected, need reconnect.`)
-                                    isReconnecting = true
-                                    if (peerConnectionDataChannel) {
-                                        peerConnectionDataChannel.onmessage = null
-                                    }
-                                    if (avatarSynthesizer !== undefined) {
-                                        avatarSynthesizer.close()
-                                    }
-                                    connectAvatar()
-                                }
-                            }
-                        }
-                    }
-                }, 2000)
-            }
+                    promptVideoSourceSelection();
+                }, 500); // Small delay to ensure DOM is fully ready
+            });
+        } else {
+            initializeSystems();
+            // Show video source prompt after systems are initialized
+            setTimeout(() => {
+                promptVideoSourceSelection();
+            }, 500);
         }
 
-        // Initialize on page load
         window.onload = () => {
-            loadConfig()
-            setInterval(() => {
-                checkHung()
-            }, 2000)
+            loadConfig().then(() => {
+                // Initialize messages after config is loaded
+                if (avatarChatManager) {
+                    avatarChatManager.initMessages();
+                } else {
+                    initMessages();
+                }
+            });
+            
+            // Ensure systems are initialized
+            if (!sessionManager || !engagementBarDisplay || !engagementDetector) {
+                initializeSystems();
+            }
+            
+            // Show video source prompt if not already shown
+            if (!videoSourcePromptShown) {
+                setTimeout(() => {
+                    promptVideoSourceSelection();
+                }, 1000); // Delay to ensure everything is ready
+            }
         }
     </script>
 </body>

@@ -1,7 +1,8 @@
-﻿
 Flask==3.1.2
 flask-cors==6.0.2
 openai==2.14.0
 requests==2.32.5
-
-
+mediapipe==0.10.9
+opencv-python==4.9.0.80
+numpy==1.26.4
+azure-cognitiveservices-vision-face==0.7.0
