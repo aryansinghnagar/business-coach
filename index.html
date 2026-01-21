@@ -297,6 +297,81 @@
             align-items: center;
             justify-content: center;
         }
+
+        /* 30 Signifier Metrics Panel (beneath avatar chat) */
+        .engagement-signifiers-panel {
+            margin-top: 24px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 20px 24px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+        .signifier-panel-inner { max-width: 100%; }
+        .signifier-panel-header {
+            font-size: 1rem;
+            font-weight: 700;
+            color: rgba(255, 255, 255, 0.95);
+            margin-bottom: 16px;
+            letter-spacing: 0.02em;
+        }
+        .signifier-panel-groups {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .signifier-group {
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: 12px;
+            padding: 12px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .signifier-group-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: rgba(255, 255, 255, 0.85);
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        .signifier-list { display: flex; flex-direction: column; gap: 6px; }
+        .signifier-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.8rem;
+        }
+        .signifier-label {
+            flex: 0 0 140px;
+            color: rgba(255, 255, 255, 0.9);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .signifier-bar {
+            flex: 1;
+            min-width: 60px;
+            height: 6px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .signifier-bar-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: 3px;
+            transition: width 0.25s ease, background 0.2s ease;
+        }
+        .signifier-value {
+            flex: 0 0 28px;
+            text-align: right;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.95);
+            font-variant-numeric: tabular-nums;
+        }
         
         /* Video Source Selector Modal Styles */
         .video-source-modal {
@@ -834,6 +909,9 @@
                 margin-top: 0;
                 margin-left: 8px;
             }
+
+            .signifier-label { flex: 0 0 100px; }
+            .signifier-panel-groups { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -895,10 +973,13 @@
                 <div id="chatHistory" contentEditable="true"></div>
             </div>
         </div>
+
+        <div id="signifierPanelContainer" class="engagement-signifiers-panel"></div>
     </div>
 
     <!-- Modular JavaScript Modules -->
     <script src="/static/js/engagement-bar.js"></script>
+    <script src="/static/js/signifier-panel.js"></script>
     <script src="/static/js/engagement-detector.js"></script>
     <script src="/static/js/session-manager.js"></script>
     <script src="/static/js/avatar-chat-manager.js"></script>
@@ -919,6 +1000,7 @@
         var avatarChatManager = null
         var engagementBarDisplay = null
         var engagementDetector = null
+        var signifierPanel = null
         var videoSourceSelector = null
         
         // UI State
@@ -927,6 +1009,29 @@
         var dataSources = []
         var videoSourcePromptShown = false  // Track if video source prompt has been shown
 
+        // ========================================================================
+        // Engagement Alerts (drop / plateau)
+        // ========================================================================
+        
+        /**
+         * Handle engagement alert from backend (significant drop or plateau).
+         * Avatar interrupts current response and speaks the alert and suggestions.
+         */
+        function handleEngagementAlert(alert) {
+            if (!alert || !alert.message) return;
+            if (!avatarChatManager || !avatarAudioInitialized) {
+                console.warn('Engagement alert received but avatar not ready:', alert.type);
+                return;
+            }
+            avatarChatManager.interruptCurrentResponse();
+            var parts = [alert.message];
+            if (alert.suggestions && alert.suggestions.length) {
+                parts.push(alert.suggestions.slice(0, 3).join(' '));
+            }
+            var text = parts.join(' ');
+            setTimeout(function () { avatarChatManager.speak(text); }, 120);
+        }
+        
         // ========================================================================
         // System Initialization
         // ========================================================================
@@ -939,15 +1044,20 @@
             try {
                 // Initialize engagement bar display
                 engagementBarDisplay = new EngagementBarDisplay({
-                    averagingWindow: 10,
                     updateInterval: 500
                 });
+
+                // Initialize 30-metrics signifier panel (beneath avatar chat)
+                signifierPanel = new SignifierPanel({ containerId: 'signifierPanelContainer' });
+                signifierPanel.init();
                 
                 // Initialize engagement detector
                 engagementDetector = new EngagementDetector({
                     barDisplay: engagementBarDisplay,
+                    signifierPanel: signifierPanel,
                     apiBaseUrl: 'http://localhost:5000',
-                    pollInterval: 500
+                    pollInterval: 500,
+                    onAlert: handleEngagementAlert
                 });
                 
                 // Initialize session manager
@@ -1523,6 +1633,17 @@
             }
 
             document.getElementById('microphone').disabled = true
+
+            // Pause avatar as soon as user starts speaking (interim results)
+            speechRecognizer.recognizing = (s, e) => {
+                if (e.result.reason !== SpeechSDK.ResultReason.RecognizingSpeech) return;
+                const partial = (e.result.text || '').trim();
+                if (partial.length < 2) return;
+                if (avatarChatManager && (avatarChatManager.isSpeaking || (avatarChatManager.sessionManager && avatarChatManager.sessionManager.isStreaming))) {
+                    avatarChatManager.interruptCurrentResponse();
+                }
+            };
+
             speechRecognizer.recognized = async (s, e) => {
                 if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
                     let userQuery = e.result.text.trim()
@@ -1530,7 +1651,7 @@
                         return
                     }
 
-                    // Interrupt avatar chat if speaking
+                    // Interrupt avatar chat if still speaking/streaming (in case recognizing didn't fire)
                     if (avatarChatManager) {
                         avatarChatManager.interruptCurrentResponse();
                         await new Promise(resolve => setTimeout(resolve, 100));

@@ -52,23 +52,13 @@ class EngagementScorer:
     
     def __init__(self):
         """Initialize the engagement scorer with default weights."""
-        # Weights for combining metrics into overall score
-        # These weights can be adjusted based on domain knowledge or calibration
         self.weights = {
             'attention': 0.25,
             'eye_contact': 0.20,
             'facial_expressiveness': 0.15,
             'head_movement': 0.15,
             'symmetry': 0.10,
-            'mouth_activity': 0.15
-        }
-        
-        # Normalization ranges for different features
-        # These are based on typical values from MediaPipe landmarks
-        self.normalization_ranges = {
-            'eye_aspect_ratio': (0.15, 0.4),  # Typical EAR range
-            'mouth_aspect_ratio': (0.1, 0.5),
-            'head_angle': (-30, 30),  # Degrees
+            'mouth_activity': 0.15,
         }
     
     def compute_metrics(
@@ -122,22 +112,19 @@ class EngagementScorer:
     def calculate_score(self, metrics: EngagementMetrics) -> float:
         """
         Calculate overall engagement score from metrics.
-        
-        Args:
-            metrics: EngagementMetrics object
-        
-        Returns:
-            Overall engagement score (0-100)
+        Uses weighted average with a "weakest link" factor: any low metric
+        pulls the score down so low engagement cannot slip through.
         """
-        # Validate metrics are finite
-        attention = metrics.attention if np.isfinite(metrics.attention) else 50.0
-        eye_contact = metrics.eye_contact if np.isfinite(metrics.eye_contact) else 50.0
-        facial_expressiveness = metrics.facial_expressiveness if np.isfinite(metrics.facial_expressiveness) else 50.0
-        head_movement = metrics.head_movement if np.isfinite(metrics.head_movement) else 50.0
-        symmetry = metrics.symmetry if np.isfinite(metrics.symmetry) else 50.0
-        mouth_activity = metrics.mouth_activity if np.isfinite(metrics.mouth_activity) else 50.0
+        # Validate metrics are finite (use 0 for invalid to avoid hiding problems)
+        attention = metrics.attention if np.isfinite(metrics.attention) else 0.0
+        eye_contact = metrics.eye_contact if np.isfinite(metrics.eye_contact) else 0.0
+        facial_expressiveness = metrics.facial_expressiveness if np.isfinite(metrics.facial_expressiveness) else 0.0
+        head_movement = metrics.head_movement if np.isfinite(metrics.head_movement) else 0.0
+        symmetry = metrics.symmetry if np.isfinite(metrics.symmetry) else 0.0
+        mouth_activity = metrics.mouth_activity if np.isfinite(metrics.mouth_activity) else 0.0
         
-        score = (
+        # Weighted average (wider effective range 0-100)
+        raw = (
             attention * self.weights['attention'] +
             eye_contact * self.weights['eye_contact'] +
             facial_expressiveness * self.weights['facial_expressiveness'] +
@@ -146,12 +133,16 @@ class EngagementScorer:
             mouth_activity * self.weights['mouth_activity']
         )
         
-        # Ensure score is within valid range and is finite
+        # Weakest-link: one low metric pulls down, but not as harsh.
+        # Factor 0.55 + 0.45*min/100: min=0 -> 0.55, min=50 -> 0.775, min=100 -> 1.0.
+        min_m = min(attention, eye_contact, facial_expressiveness,
+                    head_movement, symmetry, mouth_activity)
+        factor = 0.55 + 0.45 * (min_m / 100.0)
+        score = raw * factor
+        
         score = max(0.0, min(100.0, score))
         if not np.isfinite(score):
-            print(f"Warning: Calculated invalid score from metrics, using fallback")
-            return 50.0
-        
+            return 0.0
         return float(score)
     
     def _compute_attention(
@@ -160,64 +151,40 @@ class EngagementScorer:
         landmarks: np.ndarray
     ) -> float:
         """
-        Compute attention level based on eye openness and focus.
-        
-        Higher attention = eyes open, focused forward, minimal blinking.
-        
-        Args:
-            features: Blendshape features array
-            landmarks: Face landmarks array
-        
-        Returns:
-            Attention score (0-100)
+        Compute attention from eye openness. Sensitive: small drops in EAR
+        (e.g. drowsiness, looking down) reduce score sharply. Full range 0-100.
         """
-        # Features 0-2 contain eye aspect ratios
         if len(features) < 3:
-            return 50.0
+            return 0.0
         
         left_ear = features[0]
         right_ear = features[1]
         avg_ear = features[2]
         
-        # Normalize EAR to 0-100 scale
-        # Optimal EAR is around 0.25-0.3 for engaged attention
-        ear_min, ear_max = self.normalization_ranges['eye_aspect_ratio']
-        
-        # Map EAR to attention score
-        # Too low (< 0.15) = eyes closed or drowsy
-        # Too high (> 0.4) = wide-eyed surprise or distraction
-        # Optimal (0.25-0.3) = focused attention
-        
-        # Ensure avg_ear is in reasonable range
-        if avg_ear < 0.01:
-            # Very low EAR - likely eyes closed or calculation error
-            attention = 10.0
-        elif avg_ear < ear_min:
-            # Low but not zero - map linearly
-            attention = 20.0 + (avg_ear / ear_min) * 20.0  # 20-40 range
-        elif avg_ear > 0.4:
-            # Very wide eyes - might indicate surprise/distraction
-            attention = max(50.0, 80.0 - (avg_ear - 0.4) * 50.0)
-        elif avg_ear > 0.35:
-            # Slightly wide
-            attention = 70.0 - (avg_ear - 0.35) * 40.0  # 70-66 range
+        # Sensitive EAR mapping: peak 85-100 for 0.22-0.28; steep drop outside.
+        # EAR 0.02-0.12 -> 0-25; 0.12-0.18 -> 25-45; 0.18-0.22 -> 45-70;
+        # 0.22-0.28 -> 70-100; 0.28-0.38 -> 70-55; 0.38-0.55 -> 55-25.
+        if avg_ear < 0.02:
+            attention = 0.0
+        elif avg_ear < 0.12:
+            attention = (avg_ear - 0.02) / 0.10 * 25.0  # 0-25
+        elif avg_ear < 0.18:
+            attention = 25.0 + (avg_ear - 0.12) / 0.06 * 20.0  # 25-45
+        elif avg_ear < 0.22:
+            attention = 45.0 + (avg_ear - 0.18) / 0.04 * 25.0  # 45-70
+        elif avg_ear <= 0.28:
+            attention = 70.0 + (avg_ear - 0.22) / 0.06 * 30.0  # 70-100
+        elif avg_ear < 0.38:
+            attention = 70.0 - (avg_ear - 0.28) / 0.10 * 15.0  # 70-55
+        elif avg_ear < 0.55:
+            attention = 55.0 - (avg_ear - 0.38) / 0.17 * 30.0  # 55-25
         else:
-            # Optimal range (0.15-0.35)
-            # Map to 40-80 range for good engagement
-            if avg_ear <= 0.3:
-                attention = 40.0 + (avg_ear - ear_min) / (0.3 - ear_min) * 40.0  # 40-80
-            else:
-                attention = 80.0 - (avg_ear - 0.3) / (0.35 - 0.3) * 10.0  # 80-70
+            attention = max(0.0, 25.0 - (avg_ear - 0.55) * 50.0)
         
-        # Bonus for symmetric eye openness (both eyes equally open)
+        # Asymmetry penalty: subtract up to 25 for very uneven eyes (squint, wink)
         if avg_ear > 1e-6:
-            eye_symmetry = 1.0 - abs(left_ear - right_ear) / avg_ear
-            eye_symmetry = max(0.0, min(1.0, eye_symmetry))  # Clamp to 0-1
-            attention += eye_symmetry * 10
-        else:
-            # If eyes are closed, no symmetry bonus
-            pass
-        
+            asym = abs(left_ear - right_ear) / max(avg_ear, 1e-6)
+            attention -= asym * 25.0
         return max(0.0, min(100.0, attention))
     
     def _compute_eye_contact(
@@ -227,52 +194,36 @@ class EngagementScorer:
         frame_shape: tuple
     ) -> float:
         """
-        Compute eye contact quality based on gaze direction.
-        
-        Direct eye contact = looking at camera/center.
-        Looking away = reduced engagement.
-        
-        Args:
-            features: Blendshape features array
-            landmarks: Face landmarks array
-            frame_shape: Frame dimensions
-        
-        Returns:
-            Eye contact score (0-100)
+        Eye contact from gaze vs frame center and head yaw. Sensitive: small
+        offsets or head turn reduce score sharply. Full range 0-100.
         """
         height, width = frame_shape[:2]
         frame_center = np.array([width / 2, height / 2])
         
-        # Get eye center positions
-        # Left eye center (approximate)
         left_eye_indices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
         right_eye_indices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         
         if len(landmarks) < max(max(left_eye_indices), max(right_eye_indices)) + 1:
-            return 50.0
+            return 0.0
         
         left_eye_center = np.mean(landmarks[left_eye_indices], axis=0)[:2]
         right_eye_center = np.mean(landmarks[right_eye_indices], axis=0)[:2]
         eye_center = (left_eye_center + right_eye_center) / 2
         
-        # Calculate distance from frame center (normalized)
         distance_from_center = np.linalg.norm(eye_center - frame_center)
-        max_distance = np.sqrt(width**2 + height**2) / 2
+        max_distance = max(1e-6, np.sqrt(width**2 + height**2) / 2)
+        nd = min(1.0, distance_from_center / max_distance)
+        # Steeper: use squared term so small offsets still reduce score
+        eye_contact = (1.0 - nd ** 1.3) * 100.0
         
-        # Score decreases as distance from center increases
-        normalized_distance = min(1.0, distance_from_center / max_distance)
-        eye_contact = (1.0 - normalized_distance) * 100
-        
-        # Consider head yaw (feature 33-35 contain head angles)
-        if len(features) > 35:
-            head_yaw = features[33]  # Yaw angle
-            # Penalize if head is turned away significantly
-            # Normalize yaw (assuming radians, typical range -0.5 to 0.5)
-            yaw_penalty = min(1.0, abs(head_yaw) / 0.5)  # Clamp to 0-1
-            eye_contact *= (1.0 - yaw_penalty * 0.3)
-        
-        # Ensure minimum eye contact score (even if looking away, still some engagement)
-        eye_contact = max(20.0, eye_contact)  # Minimum 20 for face detected
+        # Head yaw: participation 43,44 (degrees). Avoid over-penalizing small turns.
+        yaw_deg = 0.0
+        if len(features) > 44:
+            y, p = features[43], features[44]
+            if np.isfinite(y): yaw_deg = abs(y) if abs(y) <= 180 else min(90, abs(y))
+            if np.isfinite(p): yaw_deg = max(yaw_deg, abs(p) if abs(p) <= 180 else min(90, abs(p)))
+        yaw_penalty = min(1.0, yaw_deg / 35.0) * 0.5  # cap penalty at 50%
+        eye_contact *= (1.0 - yaw_penalty)
         
         return max(0.0, min(100.0, eye_contact))
     
@@ -281,54 +232,35 @@ class EngagementScorer:
         features: np.ndarray
     ) -> float:
         """
-        Compute facial expressiveness based on feature variance.
-        
-        More expressive faces show more variation in blendshape features.
-        However, too much variation might indicate distraction.
-        
-        Args:
-            features: Blendshape features array
-        
-        Returns:
-            Expressiveness score (0-100)
+        Expressiveness from feature variance. Sensitive: very flat (disengaged)
+        maps to 0-30; moderate to 40-90; chaotic to 30-60. Full range 0-100.
         """
         if len(features) < 10:
-            return 50.0
+            return 0.0
         
-        # Compute variance of key expressive features (mouth, eyebrows, etc.)
-        # Use features that indicate expression changes
-        expressive_feature_indices = list(range(16, 30)) + list(range(45, 60))  # Mouth and participation features
-        
-        if len(features) > max(expressive_feature_indices):
-            expressive_features = features[expressive_feature_indices]
-            # Remove zeros to get meaningful variance
-            non_zero_features = expressive_features[expressive_features != 0]
-            if len(non_zero_features) > 0:
-                avg_variance = np.var(non_zero_features)
-            else:
-                # All zeros - very flat expression
-                avg_variance = 0.0
+        idx = list(range(16, 30)) + list(range(45, 60))
+        if len(features) > max(idx):
+            arr = features[idx]
+            nz = arr[arr != 0]
+            v = np.var(nz) if len(nz) > 0 else 0.0
         else:
-            # Fallback: compute variance of all non-zero features
-            non_zero_features = features[features != 0]
-            if len(non_zero_features) > 0:
-                avg_variance = np.var(non_zero_features)
-            else:
-                avg_variance = 0.0
+            nz = features[features != 0]
+            v = np.var(nz) if len(nz) > 0 else 0.0
         
-        # Normalize variance to 0-100 scale
-        # Optimal expressiveness is moderate (not too flat, not too chaotic)
-        # For feature variance, typical range is 0.001 to 0.1
-        if avg_variance < 0.001:
-            expressiveness = 30.0 + (avg_variance / 0.001) * 20.0  # 30-50 range
-        elif avg_variance < 0.01:
-            expressiveness = 50.0 + (avg_variance - 0.001) / 0.009 * 30.0  # 50-80 range
-        elif avg_variance < 0.1:
-            expressiveness = 80.0 - (avg_variance - 0.01) / 0.09 * 20.0  # 80-60 range
+        if v < 1e-6:
+            return 50.0  # No variance: treat as neutral, don't penalize
+        elif v < 0.0005:
+            return 50.0  # Very low: neutral expression, benefit of the doubt
+        elif v < 0.003:
+            return 30.0 + (v - 0.0005) / 0.0025 * 40.0  # 30-70
+        elif v < 0.015:
+            return 70.0 + (v - 0.003) / 0.012 * 25.0    # 70-95
+        elif v < 0.08:
+            return 95.0 - (v - 0.015) / 0.065 * 45.0    # 95-50
+        elif v < 0.2:
+            return 50.0 - (v - 0.08) / 0.12 * 40.0      # 50-10
         else:
-            expressiveness = max(40.0, 60.0 - (avg_variance - 0.1) * 20.0)  # Too chaotic
-        
-        return max(0.0, min(100.0, expressiveness))
+            return max(0.0, 10.0 - (v - 0.2) * 20.0)
     
     def _compute_head_movement_score(
         self,
@@ -336,67 +268,46 @@ class EngagementScorer:
         landmarks: np.ndarray
     ) -> float:
         """
-        Compute head movement score (stability).
-        
-        Moderate stability is good (not too rigid, not too fidgety).
-        Excessive movement indicates distraction or disengagement.
-        
-        Args:
-            features: Blendshape features array
-            landmarks: Face landmarks array
-        
-        Returns:
-            Head movement score (0-100, higher = more stable/engaged)
+        Head stability (forward-facing). Sensitive: small pitch/yaw/roll
+        (e.g. 10-15°) already reduce score; 35°+ -> 0-15. Full range 0-100.
         """
-        # Features 31-34 contain head pose information
-        if len(features) < 35:
-            # Fallback: use landmark-based head orientation
-            if len(landmarks) > 10:
-                # Estimate head orientation from face outline
-                face_center = np.mean(landmarks[:10, :2], axis=0) if len(landmarks) >= 10 else np.mean(landmarks[:, :2], axis=0)
-                frame_center = np.array([landmarks[:, 0].mean(), landmarks[:, 1].mean()])
-                offset = np.linalg.norm(face_center - frame_center)
-                # Normalize offset (typical range: 0-100 pixels)
-                normalized_offset = min(1.0, offset / 100.0)
-                stability = 80.0 - normalized_offset * 30.0  # 80-50 range
-                return max(40.0, min(100.0, stability))
-            return 60.0  # Default moderate stability
+        # Participation 43=head_yaw, 44=head_pitch (degrees)
+        pitch_deg, yaw_deg = 0.0, 0.0
+        if len(features) > 44:
+            y, p = features[43], features[44]
+            if np.isfinite(y): yaw_deg = abs(y) if abs(y) <= 180 else min(90, abs(y))
+            if np.isfinite(p): pitch_deg = abs(p) if abs(p) <= 180 else min(90, abs(p))
         
-        head_pitch = abs(features[31]) if np.isfinite(features[31]) else 0.0
-        head_yaw = abs(features[32]) if np.isfinite(features[32]) else 0.0
-        head_roll = abs(features[33]) if np.isfinite(features[33]) else 0.0
+        # Landmark fallback only when no pose from participation
+        if pitch_deg == 0 and yaw_deg == 0 and len(landmarks) >= 350:
+            nose = landmarks[4, :2]
+            chin = landmarks[175, :2]
+            lf = landmarks[234, 0] if len(landmarks) > 234 else landmarks[0, 0]
+            rf = landmarks[454, 0] if len(landmarks) > 454 else landmarks[-1, 0]
+            face_cx = (lf + rf) / 2
+            face_hw = max(1e-6, abs(rf - lf) / 2)
+            dy = chin[1] - nose[1]
+            dx = chin[0] - nose[0]
+            if abs(dy) > 1e-6:
+                pitch_deg = min(90, abs(np.degrees(np.arctan(dx / dy))))
+            nose_off = abs(nose[0] - face_cx)
+            yaw_deg = min(90, (nose_off / face_hw) * 45.0)
         
-        # Convert angles to degrees (check if already in degrees or radians)
-        # If values are > 1, assume degrees; otherwise assume radians
-        if head_pitch < 1.0 and head_yaw < 1.0 and head_roll < 1.0:
-            # Likely radians
-            head_pitch_deg = np.degrees(head_pitch)
-            head_yaw_deg = np.degrees(head_yaw)
-            head_roll_deg = np.degrees(head_roll)
+        max_angle = max(pitch_deg, yaw_deg)
+        # Steep curve: 0-4° -> 95-100; 4-8° -> 85-95; 8-15° -> 60-85; 15-25° -> 30-60; 25-40° -> 5-30; 40°+ -> 0-5
+        if max_angle < 4:
+            stability = 95.0 + (4 - max_angle) / 4 * 5.0
+        elif max_angle < 8:
+            stability = 85.0 - (max_angle - 4) / 4 * 10.0
+        elif max_angle < 15:
+            stability = 60.0 - (max_angle - 8) / 7 * 30.0
+        elif max_angle < 25:
+            stability = 30.0 - (max_angle - 15) / 10 * 25.0
+        elif max_angle < 40:
+            stability = 5.0 - (max_angle - 25) / 15 * 5.0
         else:
-            # Already in degrees
-            head_pitch_deg = head_pitch
-            head_yaw_deg = head_yaw
-            head_roll_deg = head_roll
-        
-        # Score based on head angle deviation from forward-facing
-        # Optimal: small angles (0-10 degrees) = engaged
-        # Poor: large angles (>30 degrees) = distracted
-        
-        max_angle = max(head_pitch_deg, head_yaw_deg, head_roll_deg)
-        
-        if max_angle < 5:
-            stability = 90.0  # Excellent stability
-        elif max_angle < 10:
-            stability = 85.0 - (max_angle - 5) * 2  # 85-75 range
-        elif max_angle < 20:
-            stability = 75.0 - (max_angle - 10) * 2  # 75-55 range
-        elif max_angle < 30:
-            stability = 55.0 - (max_angle - 20) * 1.5  # 55-40 range
-        else:
-            stability = max(30.0, 40.0 - (max_angle - 30) * 0.3)  # 40-30 range
-        
-        return max(30.0, min(100.0, stability))  # Minimum 30 for detected face
+            stability = max(0.0, 5.0 - (max_angle - 40) / 30 * 5.0)
+        return max(0.0, min(100.0, stability))
     
     def _compute_symmetry(
         self,
@@ -404,67 +315,31 @@ class EngagementScorer:
         landmarks: np.ndarray
     ) -> float:
         """
-        Compute facial symmetry score.
-        
-        More symmetric faces typically indicate engagement and focus.
-        Asymmetry can indicate distraction, fatigue, or disengagement.
-        
-        Args:
-            features: Blendshape features array
-            landmarks: Face landmarks array
-        
-        Returns:
-            Symmetry score (0-100, higher = more symmetric)
+        Symmetry from landmarks. Sensitive: small asymmetry (tilt, one-sided
+        expression) reduces score; strong asymmetry -> 0-30. Full range 0-100.
         """
-        # Calculate symmetry from landmarks directly if feature not available
-        if len(features) < 55 or features[51] == 0.0:
-            # Fallback: compute symmetry from landmark positions
-            if len(landmarks) >= 10:
-                # Compare left and right side of face
-                face_center_x = np.mean(landmarks[:, 0])
-                
-                # Left side points (assuming first half)
-                left_points = landmarks[:len(landmarks)//2, 0]
-                # Right side points (mirrored)
-                right_points = landmarks[len(landmarks)//2:, 0]
-                
-                if len(left_points) > 0 and len(right_points) > 0:
-                    # Mirror right side
-                    right_points_mirrored = 2 * face_center_x - right_points
-                    
-                    # Calculate average distance (symmetry error)
-                    if len(left_points) == len(right_points_mirrored):
-                        symmetry_error = np.mean(np.abs(left_points - right_points_mirrored))
-                    else:
-                        # Interpolate or use min length
-                        min_len = min(len(left_points), len(right_points_mirrored))
-                        symmetry_error = np.mean(np.abs(left_points[:min_len] - right_points_mirrored[:min_len]))
-                    
-                    # Normalize (typical range: 0-50 pixels)
-                    normalized_error = min(1.0, symmetry_error / 50.0)
-                    symmetry = 90.0 - normalized_error * 40.0  # 90-50 range
-                    return max(50.0, min(100.0, symmetry))
-            
-            return 70.0  # Default good symmetry
+        if len(landmarks) < 10:
+            return 0.0
         
-        avg_symmetry = features[51]
-        
-        # Lower symmetry score (distance) = higher symmetry
-        # Normalize to 0-100 scale
-        # Typical symmetry distances: 0-50 pixels for good symmetry
-        
-        if avg_symmetry < 5:
-            symmetry = 95.0  # Excellent symmetry
-        elif avg_symmetry < 15:
-            symmetry = 85.0 + (15 - avg_symmetry) / 10 * 10  # 85-95 range
-        elif avg_symmetry < 30:
-            symmetry = 70.0 + (30 - avg_symmetry) / 15 * 15  # 70-85 range
-        elif avg_symmetry < 50:
-            symmetry = 50.0 + (50 - avg_symmetry) / 20 * 20  # 50-70 range
+        face_center_x = np.mean(landmarks[:, 0])
+        n2 = len(landmarks) // 2
+        left_x = landmarks[:n2, 0]
+        right_x = landmarks[n2:2*n2, 0] if len(landmarks) >= 2*n2 else landmarks[n2:, 0]
+        right_mirrored = 2 * face_center_x - right_x
+        min_len = min(len(left_x), len(right_mirrored))
+        if min_len == 0:
+            return 50.0
+        err = np.mean(np.abs(left_x[:min_len] - right_mirrored[:min_len]))
+        # Normalize: 0-15px -> 85-100; 15-40 -> 55-85; 40-80 -> 20-55; 80+ -> 0-20
+        if err < 15:
+            symmetry = 85.0 + (15 - err) / 15 * 15.0
+        elif err < 40:
+            symmetry = 55.0 + (40 - err) / 25 * 30.0
+        elif err < 80:
+            symmetry = 20.0 + (80 - err) / 40 * 35.0
         else:
-            symmetry = max(40.0, 50.0 - (avg_symmetry - 50) * 0.2)  # 50-40 range
-        
-        return max(40.0, min(100.0, symmetry))  # Minimum 40 for detected face
+            symmetry = max(0.0, 20.0 - (err - 80) / 60 * 20.0)
+        return max(0.0, min(100.0, symmetry))
     
     def _compute_mouth_activity(
         self,
@@ -472,78 +347,43 @@ class EngagementScorer:
         landmarks: np.ndarray
     ) -> float:
         """
-        Compute mouth activity score.
-        
-        Moderate mouth activity (speaking, occasional smiles) indicates engagement.
-        No activity (closed, still) or excessive activity might indicate disengagement.
-        
-        Args:
-            features: Blendshape features array
-            landmarks: Face landmarks array
-        
-        Returns:
-            Mouth activity score (0-100)
+        Mouth activity from MAR and openness (participation indices 42, 40).
+        Closed -> 15-40; moderate/speaking -> 55-95; wide -> 25-55. Full range 0-100.
         """
-        # Features 16-21 contain mouth information
-        if len(features) < 22:
-            # Fallback: compute from landmarks
-            if len(landmarks) >= 15:
-                # Try to find mouth region (typically last few landmarks or specific indices)
-                mouth_region = landmarks[-5:] if len(landmarks) >= 5 else landmarks
-                mouth_width = np.max(mouth_region[:, 0]) - np.min(mouth_region[:, 0])
-                mouth_height = np.max(mouth_region[:, 1]) - np.min(mouth_region[:, 1])
-                
-                if mouth_width > 1e-6:
-                    mar = mouth_height / mouth_width
-                    # Normalize MAR (typical: 0.1-0.5)
-                    if mar < 0.1:
-                        return 45.0  # Closed
-                    elif mar < 0.3:
-                        return 65.0  # Moderate
-                    elif mar < 0.5:
-                        return 75.0  # Open
-                    else:
-                        return 55.0  # Very open
-            return 60.0  # Default moderate activity
-        
-        mouth_aspect_ratio = features[18] if np.isfinite(features[18]) else 0.2
-        mouth_openness = features[19] if np.isfinite(features[19]) else 0.0
-        
-        # Normalize mouth features
-        mar_min, mar_max = self.normalization_ranges['mouth_aspect_ratio']
-        
-        # Ensure MAR is in reasonable range
-        if mouth_aspect_ratio < 0.01:
-            mouth_aspect_ratio = 0.1  # Default for closed mouth
-        elif mouth_aspect_ratio > 1.0:
-            mouth_aspect_ratio = 0.5  # Clamp very high values
-        
-        # Score based on mouth state
-        # Closed mouth (low MAR) = neutral, moderate engagement
-        # Slightly open (moderate MAR) = speaking/engaged
-        # Wide open (high MAR) = surprise or distraction
-        
-        if mouth_aspect_ratio < mar_min:
-            activity = 50.0  # Closed mouth - neutral engagement
-        elif mouth_aspect_ratio < (mar_min + mar_max) / 2:
-            # Increasing activity
-            ratio = (mouth_aspect_ratio - mar_min) / ((mar_min + mar_max) / 2 - mar_min)
-            activity = 50.0 + ratio * 30.0  # 50-80 range
-        elif mouth_aspect_ratio < mar_max:
-            # Optimal speaking range
-            ratio = (mouth_aspect_ratio - (mar_min + mar_max) / 2) / ((mar_max - mar_min) / 2)
-            activity = 80.0 - ratio * 15.0  # 80-65 range
+        # Participation: 40=mouth_openness, 41=mouth_width, 42=MAR
+        if len(features) > 44:
+            mar = features[42] if np.isfinite(features[42]) else 0.2
+            opn = features[40] if np.isfinite(features[40]) else 15.0
         else:
-            activity = 55.0  # Too wide open - slight penalty
+            mar, opn = 0.2, 15.0
+            if len(landmarks) >= 15:
+                mouth_region = landmarks[-5:] if len(landmarks) >= 5 else landmarks
+                mw = np.max(mouth_region[:, 0]) - np.min(mouth_region[:, 0])
+                mh = np.max(mouth_region[:, 1]) - np.min(mouth_region[:, 1])
+                if mw > 1e-6:
+                    mar = mh / mw
+                    opn = mh
+        mar = max(0.02, min(0.9, mar))
         
-        # Consider mouth openness separately
-        # Moderate openness is good for engagement
-        if mouth_openness > 0:
-            # Normalize openness (typical range: 10-100 pixels for mouth height)
-            normalized_openness = min(1.0, mouth_openness / 100.0)
-            if 0.15 < normalized_openness < 0.5:
-                activity += 8  # Bonus for moderate openness (speaking)
-            elif normalized_openness > 0.7:
-                activity -= 5  # Small penalty for excessive openness
+        if mar < 0.08:
+            activity = 10.0
+        elif mar < 0.18:
+            activity = 10.0 + (mar - 0.08) / 0.10 * 30.0   # 10-40
+        elif mar < 0.28:
+            activity = 40.0 + (mar - 0.18) / 0.10 * 45.0   # 40-85
+        elif mar < 0.38:
+            activity = 85.0 + (mar - 0.28) / 0.10 * 10.0   # 85-95
+        elif mar < 0.5:
+            activity = 95.0 - (mar - 0.38) / 0.12 * 35.0   # 95-60
+        elif mar < 0.7:
+            activity = 60.0 - (mar - 0.5) / 0.2 * 35.0     # 60-25
+        else:
+            activity = max(0.0, 25.0 - (mar - 0.7) * 50.0)
         
-        return max(40.0, min(100.0, activity))  # Minimum 40 for detected face
+        if opn > 0:
+            no = min(1.0, opn / 100.0)
+            if 0.12 < no < 0.45:
+                activity = min(100.0, activity + 8.0)
+            elif no > 0.65:
+                activity = max(0.0, activity - 12.0)
+        return max(0.0, min(100.0, activity))

@@ -2,13 +2,11 @@
  * Engagement Bar Display Module
  * 
  * This module handles the visual display of engagement scores using a vertical
- * engagement bar with dynamic color gradients (red to yellow to green) and
- * smooth updates through frame averaging.
+ * engagement bar with dynamic color gradients (red to yellow to green).
  * 
  * Features:
  * - Dynamic color gradient based on engagement score (0-100)
- * - 10-frame averaging for smooth display updates
- * - Smooth animations and transitions
+ * - Real-time updates (no averaging) for quick-actionable insights
  * - Modular and reusable design
  */
 
@@ -17,30 +15,23 @@ class EngagementBarDisplay {
      * Initialize the engagement bar display system.
      * 
      * @param {Object} options - Configuration options
-     * @param {number} options.averagingWindow - Number of frames to average (default: 10)
      * @param {number} options.updateInterval - Update interval in milliseconds (default: 500)
      * @param {string} options.barFillId - ID of the bar fill element (default: 'engagementBarFill')
      * @param {string} options.barValueId - ID of the bar value element (default: 'engagementBarValue')
      * @param {string} options.levelIndicatorId - ID of the level indicator element (default: 'engagementLevel')
      */
     constructor(options = {}) {
-        this.averagingWindow = options.averagingWindow || 10;
         this.updateInterval = options.updateInterval || 500;
         this.barFillId = options.barFillId || 'engagementBarFill';
         this.barValueId = options.barValueId || 'engagementBarValue';
         this.levelIndicatorId = options.levelIndicatorId || 'engagementLevel';
-        
-        // Score history for averaging
-        this.scoreHistory = [];
-        this.levelHistory = [];
-        this.faceDetectedHistory = [];
         
         // DOM elements (cached for performance)
         this.barFill = null;
         this.barValue = null;
         this.levelIndicator = null;
         
-        // Current smoothed values
+        // Current values (real-time)
         this.currentScore = 0;
         this.currentLevel = 'UNKNOWN';
         this.currentFaceDetected = false;
@@ -63,104 +54,22 @@ class EngagementBarDisplay {
     }
     
     /**
-     * Update the engagement bar with a new score.
+     * Update the engagement bar with a new score (real-time, no averaging).
      * 
      * @param {number} score - Engagement score (0-100)
      * @param {string} level - Engagement level (VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH)
      * @param {boolean} faceDetected - Whether a face was detected
      */
     update(score, level, faceDetected) {
-        // Validate input
         const validScore = Math.max(0, Math.min(100, parseFloat(score) || 0));
         const validLevel = level || 'UNKNOWN';
         const validFaceDetected = Boolean(faceDetected);
         
-        // Add to history
-        this.scoreHistory.push(validScore);
-        this.levelHistory.push(validLevel);
-        this.faceDetectedHistory.push(validFaceDetected);
+        this.currentScore = validScore;
+        this.currentLevel = validLevel;
+        this.currentFaceDetected = validFaceDetected;
         
-        // Maintain history window (keep last 10 frames)
-        if (this.scoreHistory.length > this.averagingWindow) {
-            this.scoreHistory.shift();
-            this.levelHistory.shift();
-            this.faceDetectedHistory.shift();
-        }
-        
-        // Calculate averaged values over last 10 frames
-        const averagedScore = this.calculateAverageScore();
-        const averagedLevel = this.calculateAverageLevel();
-        const averagedFaceDetected = this.calculateAverageFaceDetected();
-        
-        // Update display only if values changed significantly (avoid unnecessary renders)
-        const scoreChanged = Math.abs(this.currentScore - averagedScore) > 0.5;
-        const levelChanged = this.currentLevel !== averagedLevel;
-        const faceChanged = this.currentFaceDetected !== averagedFaceDetected;
-        
-        if (scoreChanged || levelChanged || faceChanged) {
-            this.currentScore = averagedScore;
-            this.currentLevel = averagedLevel;
-            this.currentFaceDetected = averagedFaceDetected;
-            
-            this.render();
-        }
-    }
-    
-    /**
-     * Calculate average score from history.
-     * 
-     * @returns {number} Averaged score (0-100)
-     */
-    calculateAverageScore() {
-        if (this.scoreHistory.length === 0) {
-            return 0;
-        }
-        
-        const sum = this.scoreHistory.reduce((acc, score) => acc + score, 0);
-        return sum / this.scoreHistory.length;
-    }
-    
-    /**
-     * Calculate most common level from history.
-     * 
-     * @returns {string} Most frequent engagement level
-     */
-    calculateAverageLevel() {
-        if (this.levelHistory.length === 0) {
-            return 'UNKNOWN';
-        }
-        
-        // Count occurrences of each level
-        const levelCounts = {};
-        this.levelHistory.forEach(level => {
-            levelCounts[level] = (levelCounts[level] || 0) + 1;
-        });
-        
-        // Find most common level
-        let maxCount = 0;
-        let mostCommonLevel = 'UNKNOWN';
-        for (const [level, count] of Object.entries(levelCounts)) {
-            if (count > maxCount) {
-                maxCount = count;
-                mostCommonLevel = level;
-            }
-        }
-        
-        return mostCommonLevel;
-    }
-    
-    /**
-     * Calculate if face is detected (true if majority of recent frames detected face).
-     * 
-     * @returns {boolean} True if face detected in majority of frames
-     */
-    calculateAverageFaceDetected() {
-        if (this.faceDetectedHistory.length === 0) {
-            return false;
-        }
-        
-        const trueCount = this.faceDetectedHistory.filter(detected => detected).length;
-        return trueCount > this.faceDetectedHistory.length / 2;
+        this.render();
     }
     
     /**
@@ -261,10 +170,6 @@ class EngagementBarDisplay {
      * Reset the engagement bar to initial state.
      */
     reset() {
-        this.scoreHistory = [];
-        this.levelHistory = [];
-        this.faceDetectedHistory = [];
-        
         this.currentScore = 0;
         this.currentLevel = 'UNKNOWN';
         this.currentFaceDetected = false;

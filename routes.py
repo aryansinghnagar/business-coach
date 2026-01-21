@@ -11,6 +11,7 @@ from services.azure_speech import speech_service
 from utils.helpers import build_config_response
 from engagement_state_detector import EngagementStateDetector, EngagementLevel, VideoSourceType
 from utils.context_generator import ContextGenerator
+from utils import signifier_weights
 from typing import Optional
 import config
 
@@ -381,6 +382,35 @@ def get_azure_face_api_config():
     return jsonify(config.get_azure_face_api_config())
 
 
+@api.route("/weights/signifiers", methods=["GET", "PUT"])
+def signifier_weights_route():
+    """
+    GET: Return current signifier [30] and group [4] weights. Loads from URL/file if not yet loaded.
+    PUT: Update from ML backend. Body: {"signifier": [30 floats], "group": [4 floats]}. Partial update.
+    """
+    if request.method == "GET":
+        try:
+            signifier_weights.load_weights()
+            return jsonify(signifier_weights.get_weights())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    if request.method == "PUT":
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        data = request.get_json(silent=True) or {}
+        try:
+            out = signifier_weights.set_weights(
+                signifier=data.get("signifier"),
+                group=data.get("group"),
+            )
+            return jsonify(out)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "Method not allowed"}), 405
+
+
 # ============================================================================
 # Avatar Routes (for audio output)
 # ============================================================================
@@ -452,12 +482,18 @@ def start_engagement_detection():
         }), 400
     
     try:
-        # Stop existing detector if running
         if engagement_detector:
             engagement_detector.stop_detection()
-        
-        # Create and start new detector with specified method
-        engagement_detector = EngagementStateDetector(detection_method=detection_method)
+
+        lightweight = getattr(config, "LIGHTWEIGHT_MODE", False)
+        if lightweight:
+            detection_method = "mediapipe"
+        signifier_weights.load_weights()
+
+        engagement_detector = EngagementStateDetector(
+            detection_method=detection_method,
+            lightweight_mode=lightweight,
+        )
         
         if not engagement_detector.start_detection(source_type, source_path):
             return jsonify({
@@ -467,7 +503,8 @@ def start_engagement_detection():
         return jsonify({
             "success": True,
             "message": f"Engagement detection started from {source_type_str}",
-            "detectionMethod": engagement_detector.detection_method
+            "detectionMethod": engagement_detector.detection_method,
+            "lightweightMode": getattr(engagement_detector, "lightweight_mode", False),
         })
     
     except Exception as e:
@@ -682,8 +719,14 @@ def get_engagement_state():
             "timestamp": float(state.timestamp),
             "metrics": metrics_dict,
             "context": context_dict,
-            "fps": float(engagement_detector.get_fps())
+            "fps": float(engagement_detector.get_fps()),
+            "signifierScores": state.signifier_scores if state.signifier_scores else None
         }
+        
+        # Include engagement alert if present (drop / plateau); consumed on first return
+        alert = engagement_detector.get_and_clear_pending_alert()
+        if alert:
+            response_data["alert"] = alert
         
         # Add cache control headers to ensure fresh data
         response = jsonify(response_data)

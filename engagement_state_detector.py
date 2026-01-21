@@ -28,6 +28,8 @@ from utils.face_detection_interface import FaceDetectorInterface, FaceDetectionR
 from utils.mediapipe_detector import MediaPipeFaceDetector
 from utils.azure_face_detector import AzureFaceAPIDetector
 from utils.business_meeting_feature_extractor import BusinessMeetingFeatureExtractor
+from utils.expression_signifiers import ExpressionSignifierEngine
+from utils import signifier_weights
 
 
 class EngagementLevel(Enum):
@@ -71,6 +73,7 @@ class EngagementState:
     timestamp: float  # Unix timestamp of measurement
     face_detected: bool  # Whether a face was detected in current frame
     confidence: float  # Confidence in the measurement (0-1)
+    signifier_scores: Optional[dict] = None  # 30 expression signifier scores (0-100 each)
 
 
 class EngagementStateDetector:
@@ -94,7 +97,8 @@ class EngagementStateDetector:
         smoothing_window: int = 10,
         min_face_confidence: float = 0.5,
         update_callback: Optional[Callable[[EngagementState], None]] = None,
-        detection_method: Optional[str] = None
+        detection_method: Optional[str] = None,
+        lightweight_mode: bool = False,
     ):
         """
         Initialize the engagement state detector.
@@ -105,12 +109,17 @@ class EngagementStateDetector:
             update_callback: Optional callback function called when state updates
             detection_method: Face detection method to use ("mediapipe" or "azure_face_api").
                              If None, uses config.FACE_DETECTION_METHOD
+            lightweight_mode: If True, use MediaPipe only, smaller buffer, process every 2nd
+                             frame, and skip 100-feature extractor (for low-power devices).
         """
-        # Determine detection method
+        self.lightweight_mode = bool(lightweight_mode)
+        if self.lightweight_mode:
+            detection_method = "mediapipe"
+
         if detection_method is None:
             detection_method = config.FACE_DETECTION_METHOD.lower()
-        
-        # Initialize face detector based on method
+
+        # Initialize face detector (lightweight forces MediaPipe)
         self.face_detector: Optional[FaceDetectorInterface] = None
         
         if detection_method == "azure_face_api":
@@ -133,7 +142,12 @@ class EngagementStateDetector:
         self.scorer = EngagementScorer()
         self.context_generator = ContextGenerator()
         self.feature_extractor = BusinessMeetingFeatureExtractor()
-        
+        buf = 15 if self.lightweight_mode else 45
+        self.signifier_engine = ExpressionSignifierEngine(
+            buffer_frames=buf,
+            weights_provider=signifier_weights.get_weights,
+        )
+
         # State management
         self.current_state: Optional[EngagementState] = None
         self.score_history: deque = deque(maxlen=smoothing_window)
@@ -156,7 +170,20 @@ class EngagementStateDetector:
         # Performance tracking
         self.fps_counter = deque(maxlen=30)
         self.last_frame_time = time.time()
-    
+        
+        # Alert detection: significant drop and plateau (sampled ~1/sec, 35 sec window)
+        self._alert_history: deque = deque(maxlen=35)
+        self._last_alert_push_time: float = 0.0
+        self._pending_alert: Optional[dict] = None
+        self._last_drop_alert_time: float = 0.0
+        self._last_plateau_alert_time: float = 0.0
+        self._alert_cooldown_sec: float = 60.0
+        self._drop_threshold: float = 15.0   # points below baseline to trigger drop
+        self._plateau_std_max: float = 3.0   # max std for "flat" plateau
+        self._plateau_mean_max: float = 85.0 # plateau only if mean < this (below max engagement)
+        self._plateau_mean_min: float = 25.0 # ignore very low plateaus (likely no face / noise)
+        self._frame_count: int = 0
+
     def start_detection(
         self,
         source_type: VideoSourceType = VideoSourceType.WEBCAM,
@@ -177,8 +204,15 @@ class EngagementStateDetector:
         
         # Reset state tracking
         self.consecutive_no_face_frames = 0
+        self._frame_count = 0
         self.score_history.clear()
         self.metrics_history.clear()
+        self.signifier_engine.reset()
+        self._alert_history.clear()
+        self._last_alert_push_time = 0.0
+        self._pending_alert = None
+        self._last_drop_alert_time = 0.0
+        self._last_plateau_alert_time = 0.0
         with self.lock:
             self.current_state = None
         
@@ -306,105 +340,72 @@ class EngagementStateDetector:
         """
         if not self.face_detector:
             return None
+
+        self._frame_count += 1
+        if self.lightweight_mode and (self._frame_count % 2) == 1:
+            with self.lock:
+                last = self.current_state
+            return last if last is not None else self._make_no_face_state()
         
         # Detect faces using the configured detector
         face_results = self.face_detector.detect_faces(frame)
         
         if not face_results:
-            # No face detected
             self.consecutive_no_face_frames += 1
-            
-            with self.lock:
-                if self.current_state and self.current_state.face_detected:
-                    # If we had a face before but lost it, maintain state briefly
-                    # but reset after too many consecutive frames without face
-                    if self.consecutive_no_face_frames < self.max_no_face_frames:
-                        return EngagementState(
-                            score=self.current_state.score,
-                            level=self.current_state.level,
-                            metrics=self.current_state.metrics,
-                            context=self.current_state.context,
-                            timestamp=time.time(),
-                            face_detected=False,
-                            confidence=max(0.0, self.current_state.confidence - 0.1)
-                        )
-                    else:
-                        # Too many frames without face - reset to prevent stuck state
-                        print("Warning: Too many consecutive frames without face, resetting state")
-                        self.consecutive_no_face_frames = 0
-                        return None
-                else:
-                    # Never had a face or already marked as not detected
-                    return None
+            if self.consecutive_no_face_frames >= self.max_no_face_frames:
+                self.consecutive_no_face_frames = 0
+            return self._make_no_face_state()
         
-        # Use the first detected face
         face_result = face_results[0]
         landmarks = face_result.landmarks
-        
-        # Extract business-meeting focused blendshape features (100 most important)
-        blendshape_features = self.feature_extractor.extract_features(
-            landmarks, frame.shape, face_result
-        )
-        
-        # Debug: Check if features are all zeros or very small
-        if np.allclose(blendshape_features, 0.0, atol=1e-6):
-            print("Warning: All features are zero or near-zero, check feature extraction")
-        elif np.max(np.abs(blendshape_features)) < 0.01:
-            print(f"Warning: Features are very small (max={np.max(np.abs(blendshape_features)):.6f})")
-        
-        # Compute engagement metrics
-        metrics = self.scorer.compute_metrics(blendshape_features, landmarks, frame.shape)
-        
-        # Debug: Log metrics for troubleshooting
-        if len(self.score_history) % 30 == 0:  # Log every ~1 second at 30 FPS
-            print(f"Debug - Metrics: attention={metrics.attention:.1f}, eye_contact={metrics.eye_contact:.1f}, "
-                  f"expressiveness={metrics.facial_expressiveness:.1f}, head_movement={metrics.head_movement:.1f}, "
-                  f"symmetry={metrics.symmetry:.1f}, mouth_activity={metrics.mouth_activity:.1f}")
-            print(f"Debug - Features[0-2] (EAR): {blendshape_features[0]:.4f}, {blendshape_features[1]:.4f}, {blendshape_features[2]:.4f}")
-        
-        # Calculate overall engagement score
-        score = self.scorer.calculate_score(metrics)
-        
-        # Validate score is reasonable (not NaN or invalid)
+
+        if self.lightweight_mode:
+            self.signifier_engine.update(landmarks, face_result, frame.shape)
+            signifier_scores = self.signifier_engine.get_all_scores()
+            score = self.signifier_engine.get_composite_score(signifier_scores)
+            metrics = self._metrics_from_signifiers(signifier_scores)
+        else:
+            blendshape_features = self.feature_extractor.extract_features(
+                landmarks, frame.shape, face_result
+            )
+            metrics = self.scorer.compute_metrics(blendshape_features, landmarks, frame.shape)
+            self.signifier_engine.update(landmarks, face_result, frame.shape)
+            signifier_scores = self.signifier_engine.get_all_scores()
+            score = self.signifier_engine.get_composite_score(signifier_scores)
+
         if not np.isfinite(score) or score < 0 or score > 100:
-            print(f"Warning: Invalid score computed: {score}, using fallback")
-            score = 50.0  # Default to medium engagement
+            score = float(self.scorer.calculate_score(metrics)) if not self.lightweight_mode else (
+                float(np.mean(list(signifier_scores.values()))) if signifier_scores else 50.0
+            )
+        score = max(0.0, min(100.0, score))
         
-        # Apply smoothing using simple moving average over last 10 frames
+        # Use raw score for real-time, quick-actionable insights (no 10-frame averaging)
         self.score_history.append(score)
         self.metrics_history.append(metrics)
         
-        # Calculate simple average over the last 10 frames (or all available if less than 10)
-        # This provides smooth updates while still being responsive to changes
-        if len(self.score_history) > 0:
-            # Use the last 10 frames (or all available if less than 10)
-            recent_scores = list(self.score_history)[-10:] if len(self.score_history) >= 10 else list(self.score_history)
-            smoothed_score = np.mean(recent_scores)
-        else:
-            smoothed_score = score
-        
-        # Ensure smoothed score is valid
-        if not np.isfinite(smoothed_score):
-            smoothed_score = score if np.isfinite(score) else 50.0
-        
-        # Clamp to valid range
-        smoothed_score = max(0.0, min(100.0, smoothed_score))
-        
-        # Debug: Log score progression (less frequently to avoid spam)
-        if len(self.score_history) % 30 == 0:  # Every ~1 second at 30 FPS
-            print(f"Debug - Raw score: {score:.1f}, Smoothed (10-frame avg): {smoothed_score:.1f}, History size: {len(self.score_history)}")
-        
+        # Real-time score: use current frame score directly
+        realtime_score = score
+        if not np.isfinite(realtime_score):
+            realtime_score = 50.0
+        realtime_score = max(0.0, min(100.0, realtime_score))
         smoothed_metrics = self._average_metrics() if self.metrics_history else metrics
         
         # Reset no-face counter since we detected a face
         self.consecutive_no_face_frames = 0
         
-        # Determine engagement level
-        level = EngagementLevel.from_score(smoothed_score)
+        # Sample score ~once per second for alert detection
+        now = time.time()
+        if now - self._last_alert_push_time >= 1.0:
+            self._alert_history.append(float(realtime_score))
+            self._last_alert_push_time = now
+            self._check_alerts(realtime_score, now)
+        
+        # Determine engagement level from real-time score
+        level = EngagementLevel.from_score(realtime_score)
         
         # Generate context for AI coaching
         context = self.context_generator.generate_context(
-            smoothed_score,
+            realtime_score,
             smoothed_metrics,
             level
         )
@@ -413,31 +414,100 @@ class EngagementStateDetector:
         confidence = self._calculate_confidence()
         
         return EngagementState(
-            score=float(smoothed_score),
+            score=float(realtime_score),
             level=level,
             metrics=smoothed_metrics,
             context=context,
             timestamp=time.time(),
             face_detected=True,
-            confidence=confidence
+            confidence=confidence,
+            signifier_scores=signifier_scores
         )
     
-    def _calculate_polygon_area(self, vertices: np.ndarray) -> float:
+    def _metrics_from_signifiers(self, s: dict) -> EngagementMetrics:
+        """Build EngagementMetrics from 30 signifier scores (lightweight path)."""
+        def m(*keys: str) -> float:
+            vals = [s.get(k, 50.0) for k in keys if k in s]
+            return float(np.mean(vals)) if vals else 50.0
+        return EngagementMetrics(
+            attention=m("g1_duchenne", "g1_eye_contact", "g1_eyebrow_flash", "g1_pupil_dilation"),
+            eye_contact=float(s.get("g1_eye_contact", 50.0)),
+            facial_expressiveness=m("g1_duchenne", "g1_parted_lips", "g4_smile_transition", "g1_softened_forehead"),
+            head_movement=m("g1_head_tilt", "g1_rhythmic_nodding", "g1_forward_lean"),
+            symmetry=float(s.get("g1_mirroring", 50.0)),
+            mouth_activity=float(s.get("g1_parted_lips", 50.0)),
+        )
+
+    def _make_no_face_state(self) -> EngagementState:
+        """Build an engagement state with score 0 when no face is detected."""
+        zero_metrics = EngagementMetrics()
+        context = self.context_generator.generate_context(
+            0.0, zero_metrics, EngagementLevel.VERY_LOW
+        )
+        return EngagementState(
+            score=0.0,
+            level=EngagementLevel.VERY_LOW,
+            metrics=zero_metrics,
+            context=context,
+            timestamp=time.time(),
+            face_detected=False,
+            confidence=0.0
+        )
+    
+    def _check_alerts(self, current_score: float, now: float) -> None:
         """
-        Calculate the area of a polygon using the shoelace formula.
-        
-        Args:
-            vertices: numpy array of vertex coordinates (N, 2)
-        
-        Returns:
-            float: Polygon area
+        Check for significant engagement drop or plateau and set _pending_alert.
+        Uses _alert_history (one sample per second). Cooldown per alert type.
         """
-        if len(vertices) < 3:
-            return 0.0
-        
-        x = vertices[:, 0]
-        y = vertices[:, 1]
-        return 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+        arr = list(self._alert_history)
+        if len(arr) < 20:
+            return
+        with self.lock:
+            if self._pending_alert is not None:
+                return
+            # Significant drop: current (recent mean) vs baseline (older mean)
+            baseline = float(np.mean(arr[:10]))
+            recent = float(np.mean(arr[-5:]))
+            if recent < baseline - self._drop_threshold and (now - self._last_drop_alert_time) >= self._alert_cooldown_sec:
+                self._pending_alert = {
+                    "type": "drop",
+                    "message": "Engagement has dropped noticeably. Here are some ways to re-engage: ",
+                    "suggestions": [
+                        "Ask an open-ended question.",
+                        "Pause and check for understanding.",
+                        "Share a relevant example or story.",
+                        "Invite them to contribute their view.",
+                        "Consider a short break or change of pace."
+                    ]
+                }
+                self._last_drop_alert_time = now
+                return
+            # Plateau: low variance, mean below max engagement, above noise floor
+            last20 = arr[-20:]
+            std = float(np.std(last20))
+            mean = float(np.mean(last20))
+            if (std < self._plateau_std_max and
+                self._plateau_mean_min < mean < self._plateau_mean_max and
+                (now - self._last_plateau_alert_time) >= self._alert_cooldown_sec):
+                self._pending_alert = {
+                    "type": "plateau",
+                    "message": "Engagement has been steady but could be higher. Consider: ",
+                    "suggestions": [
+                        "Introduce a thought-provoking question.",
+                        "Add more energy and variety to your delivery.",
+                        "Use their name and invite direct input.",
+                        "Share something novel or unexpected.",
+                        "Propose a quick interactive element."
+                    ]
+                }
+                self._last_plateau_alert_time = now
+    
+    def get_and_clear_pending_alert(self) -> Optional[dict]:
+        """Thread-safe get and clear of pending alert. Returns None if none."""
+        with self.lock:
+            a = self._pending_alert
+            self._pending_alert = None
+            return a
     
     def _average_metrics(self) -> EngagementMetrics:
         """

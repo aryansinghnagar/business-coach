@@ -1,0 +1,5 @@
+{
+  "_comment": "Pre-trained weights from ML backend. signifier: 30 floats (one per metric in utils.signifier_weights.SIGNIFIER_KEYS_ORDER). group: [G1,G2,G3,G4] for composite = G1*w1+G2*w2+G3*w3+G4*w4. Use 1.0 for equal; learned weights can replace.",
+  "signifier": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+  "group": [0.35, 0.15, 0.35, 0.15]
+}

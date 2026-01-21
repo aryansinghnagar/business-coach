@@ -190,27 +190,62 @@ class AvatarChatManager {
     
     /**
      * Queue token for speech synthesis.
+     * Always appends to buffer first, then speaks complete sentences.
+     * Ensures no text is lost and multi-paragraph responses play fully.
      * 
      * @param {string} token - Token to queue
      */
     queueSpeechToken(token) {
-        if (!this.avatarSynthesizer || !this.sessionManager.shouldContinueStreaming()) {
+        if (!this.avatarSynthesizer || (this.sessionManager && !this.sessionManager.shouldContinueStreaming())) {
             return;
         }
         
-        // Check for sentence-ending punctuation
-        const shouldSpeak = this.sentenceLevelPunctuations.some(punct => 
-            token.includes(punct)
-        ) || token === '\n' || token === '\n\n';
+        // Always append token first to avoid losing any text
+        this.speakingText += token;
         
-        if (shouldSpeak && this.speakingText.trim()) {
-            // Speak current sentence
-            this.speak(this.speakingText);
-            this.speakingText = '';
-        } else {
-            // Accumulate text
-            this.speakingText += token;
+        // Repeatedly extract and speak complete sentences, keep remainder
+        while (this.speakingText.length > 0) {
+            const match = this.findFirstSentenceEnd(this.speakingText);
+            if (!match) {
+                break;
+            }
+            const toSpeak = match[1];  // including the punctuation
+            const rest = match[2];
+            this.speakingText = rest;
+            if (toSpeak.trim().length > 0) {
+                this.speak(toSpeak.trim());
+                // Only speak one sentence per call; rest will be handled on next token or loop
+                break;
+            }
         }
+    }
+    
+    /**
+     * Find the first sentence boundary in text.
+     * @returns {null|Array} Null if no boundary, else [fullMatch, sentenceWithPunct, rest]
+     */
+    findFirstSentenceEnd(text) {
+        if (!text || text.length === 0) return null;
+        const puncts = this.sentenceLevelPunctuations;
+        let earliest = -1;
+        let which = '';
+        for (const p of puncts) {
+            const i = text.indexOf(p);
+            if (i !== -1 && (earliest === -1 || i < earliest)) {
+                earliest = i;
+                which = p;
+            }
+        }
+        // Also treat newline as sentence end
+        const n = text.indexOf('\n');
+        if (n !== -1 && (earliest === -1 || n < earliest)) {
+            earliest = n;
+            which = '\n';
+        }
+        if (earliest === -1) return null;
+        const sentence = text.substring(0, earliest + which.length);
+        const rest = text.substring(earliest + which.length);
+        return [which, sentence, rest];
     }
     
     /**
@@ -271,57 +306,57 @@ class AvatarChatManager {
             }
         }
         
-        // Speak
-        this.avatarSynthesizer.speakSsmlAsync(ssml).then((result) => {
-            if (this.isInterrupted) {
-                this.isInterrupted = false;
-                return;
-            }
-            
-            if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-                console.log(`Avatar audio synthesized for text: ${text.substring(0, 50)}...`);
-            } else if (result.reason === SpeechSDK.ResultReason.Canceled) {
-                console.log('Avatar speech was canceled');
-                this.isSpeaking = false;
-                this.speakingText = '';
-                if (this.appConfig.avatar.showSubtitles) {
-                    const subtitles = document.getElementById('subtitles');
-                    if (subtitles) subtitles.hidden = true;
-                }
-                return;
-            }
-            
+        // Speak and ensure we continue with the queue when done
+        const advanceQueue = () => {
             this.speakingText = '';
-            
-            // Hide subtitles when done speaking
-            if (this.appConfig.avatar.showSubtitles) {
+            if (this.appConfig && this.appConfig.avatar && this.appConfig.avatar.showSubtitles) {
                 const subtitles = document.getElementById('subtitles');
                 if (subtitles) subtitles.hidden = true;
             }
-            
-            // Continue with next queued text
             if (!this.isInterrupted && this.spokenTextQueue.length > 0) {
                 this.speak(this.spokenTextQueue.shift());
             } else {
                 this.isSpeaking = false;
             }
-        }).catch((error) => {
+        };
+
+        this.avatarSynthesizer.speakSsmlAsync(ssml).then((result) => {
             if (this.isInterrupted) {
                 this.isInterrupted = false;
+                this.isSpeaking = false;
+                this.spokenTextQueue = [];
+                this.speakingText = '';
                 return;
             }
             
+            if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
+                advanceQueue();
+            } else if (result.reason === SpeechSDK.ResultReason.Canceled) {
+                this.isSpeaking = false;
+                this.speakingText = '';
+                if (this.appConfig && this.appConfig.avatar && this.appConfig.avatar.showSubtitles) {
+                    const subtitles = document.getElementById('subtitles');
+                    if (subtitles) subtitles.hidden = true;
+                }
+                if (!this.isInterrupted && this.spokenTextQueue.length > 0) {
+                    this.speak(this.spokenTextQueue.shift());
+                }
+            } else {
+                advanceQueue();
+            }
+        }).catch((error) => {
+            if (this.isInterrupted) {
+                this.isInterrupted = false;
+                this.isSpeaking = false;
+                return;
+            }
             console.error('Error speaking:', error);
             this.isSpeaking = false;
             this.speakingText = '';
-            
-            // Hide subtitles on error
-            if (this.appConfig.avatar.showSubtitles) {
+            if (this.appConfig && this.appConfig.avatar && this.appConfig.avatar.showSubtitles) {
                 const subtitles = document.getElementById('subtitles');
                 if (subtitles) subtitles.hidden = true;
             }
-            
-            // Continue with next queued text if available
             if (!this.isInterrupted && this.spokenTextQueue.length > 0) {
                 this.speak(this.spokenTextQueue.shift());
             }

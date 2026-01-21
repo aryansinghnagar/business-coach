@@ -53,6 +53,13 @@ def build_config_response() -> Dict[str, Any]:
             "showSubtitles": config.SHOW_SUBTITLES
         },
         "systemPrompt": config.SYSTEM_PROMPT,
-        "faceDetection": config.get_face_detection_config(),
+        "faceDetection": {
+            **config.get_face_detection_config(),
+            "lightweightMode": getattr(config, "LIGHTWEIGHT_MODE", False),
+        },
+        "signifierWeights": {
+            "url": getattr(config, "SIGNIFIER_WEIGHTS_URL", None),
+            "path": getattr(config, "SIGNIFIER_WEIGHTS_PATH", "weights/signifier_weights.json"),
+        },
         "azureFaceApi": config.get_azure_face_api_config()
     }

@@ -12,6 +12,7 @@ from .face_detection_interface import FaceDetectorInterface, FaceDetectionResult
 from .mediapipe_detector import MediaPipeFaceDetector
 from .azure_face_detector import AzureFaceAPIDetector
 from .business_meeting_feature_extractor import BusinessMeetingFeatureExtractor
+from .expression_signifiers import ExpressionSignifierEngine
 
 __all__ = [
     'VideoSourceHandler',
@@ -24,5 +25,6 @@ __all__ = [
     'FaceDetectionResult',
     'MediaPipeFaceDetector',
     'AzureFaceAPIDetector',
-    'BusinessMeetingFeatureExtractor'
+    'BusinessMeetingFeatureExtractor',
+    'ExpressionSignifierEngine',
 ]

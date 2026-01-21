@@ -22,8 +22,10 @@ class EngagementDetector {
      */
     constructor(options = {}) {
         this.barDisplay = options.barDisplay || null;
+        this.signifierPanel = options.signifierPanel || null;
         this.apiBaseUrl = options.apiBaseUrl || 'http://localhost:5000';
         this.pollInterval = options.pollInterval || 500;
+        this.onAlert = options.onAlert || null;
         
         // State management
         this.isActive = false;
@@ -105,9 +107,12 @@ class EngagementDetector {
             this.isActive = false;
             this.stopPolling();
             
-            // Reset bar display
+            // Reset bar display and signifier panel
             if (this.barDisplay) {
                 this.barDisplay.reset();
+            }
+            if (this.signifierPanel) {
+                this.signifierPanel.reset();
             }
             
             // Clear state
@@ -195,6 +200,20 @@ class EngagementDetector {
             } else if (this.barDisplay) {
                 // If no score but bar display exists, update with 0
                 this.barDisplay.update(0, 'UNKNOWN', false);
+            }
+            
+            // Update 30 signifier metrics panel
+            if (this.signifierPanel) {
+                if (data.faceDetected === false) {
+                    this.signifierPanel.reset();
+                } else if (data.signifierScores != null) {
+                    this.signifierPanel.update(data.signifierScores);
+                }
+            }
+
+            // Engagement alerts (significant drop or plateau): inform via avatar
+            if (data.alert && data.alert.message && typeof this.onAlert === 'function') {
+                this.onAlert(data.alert);
             }
             
         } catch (error) {

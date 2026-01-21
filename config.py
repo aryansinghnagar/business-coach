@@ -54,6 +54,18 @@ AZURE_FACE_API_REGION: str = os.getenv("AZURE_FACE_API_REGION", "centralindia")
 # Options: "mediapipe" (default) or "azure_face_api"
 FACE_DETECTION_METHOD: str = os.getenv("FACE_DETECTION_METHOD", "mediapipe")
 
+# Lightweight mode: MediaPipe only, reduced buffer, process every 2nd frame.
+# Use on devices with less computational power for real-time processing.
+LIGHTWEIGHT_MODE: bool = os.getenv("LIGHTWEIGHT_MODE", "false").lower() == "true"
+
+# ============================================================================
+# Signifier Weights (ML backend / pre-trained)
+# ============================================================================
+# URL to fetch signifier weights JSON: {"signifier": [30 floats], "group": [4 floats]}
+SIGNIFIER_WEIGHTS_URL: Optional[str] = os.getenv("SIGNIFIER_WEIGHTS_URL", None)
+# Local path if URL not set: weights/signifier_weights.json
+SIGNIFIER_WEIGHTS_PATH: str = os.getenv("SIGNIFIER_WEIGHTS_PATH", "weights/signifier_weights.json")
+
 # ============================================================================
 # Speech-to-Text / Text-to-Speech Configuration
 # ============================================================================

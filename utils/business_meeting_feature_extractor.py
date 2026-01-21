@@ -180,16 +180,14 @@ class BusinessMeetingFeatureExtractor:
             left_eye = landmarks[:min(16, len(landmarks))] if len(landmarks) >= 8 else landmarks
             right_eye = landmarks[:min(16, len(landmarks))] if len(landmarks) >= 8 else landmarks
         
-        # Eye Aspect Ratio (EAR) - indicator of eye openness
+        # Eye Aspect Ratio (EAR) - preserve full range for sensitive scoring
         left_ear = self._calculate_eye_aspect_ratio(left_eye)
         right_ear = self._calculate_eye_aspect_ratio(right_eye)
-        avg_ear = (left_ear + right_ear) / 2.0 if (left_ear > 0 or right_ear > 0) else 0.2  # Default if both zero
-        
-        # Ensure EAR values are reasonable
-        left_ear = max(0.05, min(0.5, left_ear)) if left_ear > 0 else 0.2
-        right_ear = max(0.05, min(0.5, right_ear)) if right_ear > 0 else 0.2
-        avg_ear = max(0.1, min(0.4, avg_ear))
-        
+        avg_ear = (left_ear + right_ear) / 2.0 if (left_ear > 0 or right_ear > 0) else 0.05
+        # Light clamp only to avoid outliers; allow 0.02-0.55 for sensitivity
+        left_ear = max(0.02, min(0.55, left_ear)) if left_ear > 0 else 0.05
+        right_ear = max(0.02, min(0.55, right_ear)) if right_ear > 0 else 0.05
+        avg_ear = max(0.02, min(0.55, avg_ear))
         features.extend([left_ear, right_ear, avg_ear])
         
         # Eye area (engagement indicator)
@@ -215,8 +213,8 @@ class BusinessMeetingFeatureExtractor:
         features.extend([left_eye_variance[0], left_eye_variance[1],
                         right_eye_variance[0], right_eye_variance[1]])
         
-        # Blink detection (low EAR = potential blink)
-        blink_indicator = 1.0 if avg_ear > 0.2 else 0.0
+        # Blink / closure indicator (sensitive: 0.18 threshold)
+        blink_indicator = 1.0 if avg_ear > 0.18 else 0.0
         features.append(blink_indicator)
         
         return features
@@ -337,16 +335,17 @@ class BusinessMeetingFeatureExtractor:
         mouth_aspect_ratio = mouth_openness / max(mouth_width, 1e-6)
         features.extend([mouth_openness, mouth_width, mouth_aspect_ratio])
         
-        # Head orientation (facing forward = ready to participate)
-        nose_tip = landmarks[4]
-        chin = landmarks[175]
-        left_face = landmarks[234]
-        right_face = landmarks[454]
-        
-        head_yaw = np.arctan2((left_face[0] - right_face[0]) / 2, 
-                             abs(left_face[2] - right_face[2])) * 180 / np.pi
-        head_pitch = np.arctan2(chin[1] - nose_tip[1], 
-                               abs(chin[2] - nose_tip[2])) * 180 / np.pi
+        # Head orientation (x,y only; z can be 0 and breaks atan2)
+        nose_tip = landmarks[4, :2]
+        chin = landmarks[175, :2]
+        lf = landmarks[234, 0]
+        rf = landmarks[454, 0]
+        face_cx = (lf + rf) / 2
+        face_hw = max(1e-6, abs(rf - lf) / 2)
+        head_yaw = np.clip((nose_tip[0] - face_cx) / face_hw, -1.5, 1.5) * 45.0  # degrees
+        dy, dx = chin[1] - nose_tip[1], chin[0] - nose_tip[0]
+        head_pitch = np.degrees(np.arctan(np.clip(dx / (abs(dy) + 1e-6), -2, 2))) if abs(dy) > 1e-6 else 0.0
+        head_pitch = abs(head_pitch)
         features.extend([head_yaw, head_pitch])
         
         # Face orientation towards camera
