@@ -56,6 +56,14 @@ This document provides an overview of all documentation files in the Business Me
 - Engagement level descriptions
 - Best practices
 
+### [EXPRESSION_SIGNIFIERS_DOCUMENTATION.md](EXPRESSION_SIGNIFIERS_DOCUMENTATION.md)
+**Expression signifiers reference** - For developers and analysts:
+- Complete documentation of all 30 expression signifiers
+- Calculation methods and scoring logic
+- Interpretation guides for each metric
+- Technical implementation details
+- Troubleshooting and best practices
+
 ## Quick Reference
 
 ### For Users
@@ -65,8 +73,9 @@ This document provides an overview of all documentation files in the Business Me
 ### For Developers
 1. Read [ARCHITECTURE.md](ARCHITECTURE.md) for system design
 2. Read [ENGAGEMENT_SYSTEM_README.md](ENGAGEMENT_SYSTEM_README.md) for engagement system details
-3. Read [AZURE_FACE_API_INTEGRATION.md](AZURE_FACE_API_INTEGRATION.md) if using Azure Face API
-4. Reference [ENGAGEMENT_CONTEXT.md](ENGAGEMENT_CONTEXT.md) for AI integration
+3. Read [EXPRESSION_SIGNIFIERS_DOCUMENTATION.md](EXPRESSION_SIGNIFIERS_DOCUMENTATION.md) for detailed signifier reference
+4. Read [AZURE_FACE_API_INTEGRATION.md](AZURE_FACE_API_INTEGRATION.md) if using Azure Face API
+5. Reference [ENGAGEMENT_CONTEXT.md](ENGAGEMENT_CONTEXT.md) for AI integration
 
 ## Documentation Structure
 
@@ -78,6 +87,7 @@ business-meeting-copilot/
 │
 ├── ENGAGEMENT_DETECTION_DOCUMENTATION.md  # User guide
 ├── ENGAGEMENT_SYSTEM_README.md            # Technical overview
+├── EXPRESSION_SIGNIFIERS_DOCUMENTATION.md # Expression signifiers reference
 ├── ENGAGEMENT_CONTEXT.md                  # AI integration guide
 └── AZURE_FACE_API_INTEGRATION.md         # Azure Face API guide
 ```
