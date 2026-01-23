@@ -546,6 +546,74 @@
             color: rgba(255, 255, 255, 0.5);
         }
         
+        .face-detection-method-selector {
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .face-detection-method-selector label {
+            display: block;
+            margin-bottom: 12px;
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        .face-detection-method-option {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s ease;
+            margin-bottom: 12px;
+        }
+        
+        .face-detection-method-option:hover:not(:has(input:disabled)) {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+        
+        .face-detection-method-option:has(input:checked) {
+            background: rgba(99, 102, 241, 0.15);
+            border-color: rgba(99, 102, 241, 0.7);
+        }
+        
+        .face-detection-method-option:has(input:disabled) {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .face-detection-method-option input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #6366f1;
+            flex-shrink: 0;
+        }
+        
+        .face-detection-method-option input[type="radio"]:disabled {
+            cursor: not-allowed;
+        }
+        
+        .face-detection-method-info {
+            flex: 1;
+        }
+        
+        .face-detection-method-title {
+            font-weight: 500;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+        
+        .face-detection-method-description {
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
         .video-source-modal-footer {
             display: flex;
             gap: 12px;
@@ -1101,9 +1169,9 @@
             
             if (!videoSourceSelector) {
                 console.warn('Video source selector not initialized');
-                // Fallback to default (stream) if systems are ready
+                // Fallback to default (stream) with MediaPipe if systems are ready
                 if (sessionManager) {
-                    sessionManager.startSession('stream', null, null).catch(err => {
+                    sessionManager.startSession('stream', null, 'mediapipe').catch(err => {
                         console.warn('Could not start parallel session:', err);
                     });
                 }
@@ -1120,7 +1188,7 @@
          * @param {Object} selection - Selected video source options
          */
         async function handleVideoSourceSelected(selection) {
-            const { sourceType, sourcePath, file } = selection;
+            const { sourceType, sourcePath, file, detectionMethod } = selection;
             
             try {
                 // If file is selected, upload it first
@@ -1156,11 +1224,14 @@
                     }
                 }
                 
-                // Start session with selected source
+                // Start session with selected source and detection method
                 // Note: This starts engagement detection, but avatar session is separate
+                // Default to 'mediapipe' if not specified
+                const selectedDetectionMethod = detectionMethod || 'mediapipe';
+                
                 if (sessionManager) {
-                    await sessionManager.startSession(sourceType, finalSourcePath, null);
-                    console.log(`Engagement detection started with source: ${sourceType}`);
+                    await sessionManager.startSession(sourceType, finalSourcePath, selectedDetectionMethod);
+                    console.log(`Engagement detection started with source: ${sourceType}, method: ${selectedDetectionMethod}`);
                     
                     // Show success message
                     console.log('✓ Video source selected and engagement detection started');

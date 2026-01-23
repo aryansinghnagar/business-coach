@@ -6,6 +6,7 @@ This module contains reusable utility functions used throughout the application.
 
 from typing import Dict, Any
 import config
+from utils.face_detection_preference import get_face_detection_method
 
 
 def build_config_response() -> Dict[str, Any]:
@@ -55,6 +56,7 @@ def build_config_response() -> Dict[str, Any]:
         "systemPrompt": config.SYSTEM_PROMPT,
         "faceDetection": {
             **config.get_face_detection_config(),
+            "method": get_face_detection_method(),
             "lightweightMode": getattr(config, "LIGHTWEIGHT_MODE", False),
         },
         "signifierWeights": {

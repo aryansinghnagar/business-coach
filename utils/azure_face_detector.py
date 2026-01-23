@@ -6,6 +6,7 @@ This module provides an Azure Face API-based implementation of the FaceDetectorI
 
 import numpy as np
 from typing import List, Optional, Tuple, Dict, Any
+import requests
 
 from utils.face_detection_interface import FaceDetectorInterface, FaceDetectionResult
 from services.azure_face_api import get_azure_face_api_service
@@ -22,6 +23,10 @@ class AzureFaceAPIDetector(FaceDetectorInterface):
         """Initialize Azure Face API detector."""
         self.service = get_azure_face_api_service()
         self._available = self.service is not None
+        if not self._available:
+            print("Warning: Azure Face API detector initialized but service is not available")
+        else:
+            print(f"Azure Face API detector initialized. Endpoint: {self.service.endpoint if self.service else 'N/A'}")
     
     def detect_faces(self, image: np.ndarray) -> List[FaceDetectionResult]:
         """
@@ -54,6 +59,12 @@ class AzureFaceAPIDetector(FaceDetectorInterface):
                 landmarks = self.service.extract_landmarks_from_face(face_data)
                 
                 if landmarks is None:
+                    print("Warning: Failed to extract landmarks from Azure Face API response")
+                    print(f"Face data keys: {list(face_data.keys()) if isinstance(face_data, dict) else 'Not a dict'}")
+                    continue
+                
+                if landmarks.shape[0] < 10:
+                    print(f"Warning: Insufficient landmarks extracted: {landmarks.shape[0]}")
                     continue
                 
                 # Extract bounding box
@@ -95,8 +106,17 @@ class AzureFaceAPIDetector(FaceDetectorInterface):
             
             return face_results
         
+        except requests.RequestException as e:
+            # Log detailed error information
+            error_msg = str(e)
+            print(f"Azure Face API detection error: {error_msg}")
+            # Don't return empty list on first error - let it propagate for debugging
+            # But catch and return empty to prevent crashes
+            return []
         except Exception as e:
-            print(f"Azure Face API detection error: {e}")
+            import traceback
+            print(f"Azure Face API detection error (unexpected): {e}")
+            print(f"Traceback: {traceback.format_exc()}")
             return []
     
     def is_available(self) -> bool:

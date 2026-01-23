@@ -18,8 +18,29 @@ class VideoSourceSelector {
         this.onCancel = options.onCancel || null;
         this.modal = null;
         this.fileInput = null;
+        this.azureAvailable = false;
         
         this.createModal();
+        // Check Azure availability asynchronously and update UI
+        this.checkAzureAvailability().then(() => {
+            this.updateAzureAvailability();
+        });
+    }
+    
+    /**
+     * Check if Azure Face API is available.
+     */
+    async checkAzureAvailability() {
+        try {
+            const response = await fetch('http://localhost:5000/config/face-detection');
+            if (response.ok) {
+                const config = await response.json();
+                this.azureAvailable = config.azureFaceApiAvailable || false;
+            }
+        } catch (error) {
+            console.warn('Could not check Azure Face API availability:', error);
+            this.azureAvailable = false;
+        }
     }
     
     /**
@@ -85,6 +106,28 @@ class VideoSourceSelector {
                     <div class="file-input-hint">Supported formats: MP4, AVI, MOV, WebM</div>
                 </div>
                 
+                <div class="face-detection-method-selector">
+                    <label>Face Detection Method</label>
+                    <div class="face-detection-method-option">
+                        <input type="radio" name="faceDetectionMethod" value="mediapipe" id="detectionMediaPipe" checked>
+                        <div class="face-detection-method-info">
+                            <div class="face-detection-method-title">MediaPipe (Default)</div>
+                            <div class="face-detection-method-description">
+                                Local processing, fast, 468 facial landmarks. Recommended for most users.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="face-detection-method-option" id="azureDetectionOption">
+                        <input type="radio" name="faceDetectionMethod" value="azure_face_api" id="detectionAzure">
+                        <div class="face-detection-method-info">
+                            <div class="face-detection-method-title">Azure Face API</div>
+                            <div class="face-detection-method-description" id="azureDescription">
+                                Cloud-based, 27 landmarks + emotion detection. Requires Azure configuration.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="video-source-modal-footer">
                     <button class="btn-cancel" id="cancelVideoSource">Cancel</button>
                     <button class="btn-confirm" id="confirmVideoSource">Start Detection</button>
@@ -94,6 +137,9 @@ class VideoSourceSelector {
         
         // Add to document
         document.body.appendChild(this.modal);
+        
+        // Update Azure option availability
+        this.updateAzureAvailability();
         
         // Setup event listeners
         this.setupEventListeners();
@@ -169,6 +215,29 @@ class VideoSourceSelector {
     }
     
     /**
+     * Update Azure Face API option availability.
+     */
+    updateAzureAvailability() {
+        const azureOption = this.modal.querySelector('#azureDetectionOption');
+        const azureRadio = this.modal.querySelector('#detectionAzure');
+        const azureDescription = this.modal.querySelector('#azureDescription');
+        
+        if (!this.azureAvailable && azureOption && azureRadio) {
+            azureRadio.disabled = true;
+            
+            // Update description
+            if (azureDescription) {
+                azureDescription.textContent = 'Azure Face API is not configured. Please set AZURE_FACE_API_KEY and AZURE_FACE_API_ENDPOINT.';
+                azureDescription.style.color = 'rgba(255, 255, 255, 0.5)';
+            }
+        } else if (this.azureAvailable && azureDescription) {
+            // Reset to normal description if available
+            azureDescription.textContent = 'Cloud-based, 27 landmarks + emotion detection. Requires Azure configuration.';
+            azureDescription.style.color = 'rgba(255, 255, 255, 0.7)';
+        }
+    }
+    
+    /**
      * Handle confirm button click.
      */
     handleConfirm() {
@@ -193,6 +262,10 @@ class VideoSourceSelector {
             sourcePath = file.name; // Will be replaced with server path after upload
         }
         
+        // Get selected face detection method (default to mediapipe)
+        const detectionMethodRadio = this.modal.querySelector('input[name="faceDetectionMethod"]:checked');
+        const detectionMethod = detectionMethodRadio ? detectionMethodRadio.value : 'mediapipe';
+        
         // Hide modal first for better UX
         this.hide();
         
@@ -200,7 +273,8 @@ class VideoSourceSelector {
             this.onSelect({
                 sourceType: sourceType,
                 sourcePath: sourcePath,
-                file: sourceType === 'file' ? this.selectedFile : null
+                file: sourceType === 'file' ? this.selectedFile : null,
+                detectionMethod: detectionMethod
             });
         }
     }
@@ -212,6 +286,10 @@ class VideoSourceSelector {
         if (this.modal) {
             this.modal.classList.add('active');
             document.body.style.overflow = 'hidden';
+            // Refresh Azure availability when showing modal
+            this.checkAzureAvailability().then(() => {
+                this.updateAzureAvailability();
+            });
         }
     }
     

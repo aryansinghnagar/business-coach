@@ -176,23 +176,34 @@ The Expression Signifier System analyzes facial landmarks to compute **30 distin
 
 ---
 
-### g1_mirroring: Facial Symmetry
+### g1_facial_symmetry: Facial Symmetry
 
-**What it measures**: Facial symmetry as proxy for mirroring behavior
+**What it measures**: Bilateral symmetry of facial features (left vs. right side of face)
 
 **Calculation**:
-- Compares left/right eye centers and mouth corners
-- Calculates symmetry error relative to face center
-- Normalizes by face scale
-- Score: 100 - (error × 200)
+- Checks symmetry of eyes, eyebrows, mouth, and nose alignment
+- Mirrors right side features across face center (vertical midline) and compares to left side
+- Measures both horizontal and vertical symmetry
+- Normalizes errors by face scale (inter-ocular distance) for size invariance
+- Uses weighted combination: eyes (40%), mouth (30%), brows (20%), nose (10%)
+- Horizontal symmetry weighted 75%, vertical symmetry 25% (horizontal is more perceptually important)
+- Accounts for natural facial asymmetry in realistic scoring curve
+
+**Scoring Curve** (error as percentage of inter-ocular distance):
+- **< 3% error**: Excellent symmetry (90-100 score)
+- **3-6% error**: Good symmetry (70-90 score)
+- **6-10% error**: Moderate symmetry (50-70 score)
+- **10-15% error**: Poor symmetry (30-50 score)
+- **> 15% error**: Very poor symmetry (0-30 score)
 
 **Score Interpretation**:
-- **80-100**: High symmetry, engaged and mirroring
-- **60-80**: Good symmetry, attentive
-- **40-60**: Moderate symmetry, neutral
-- **<40**: Low symmetry, possible distraction
+- **90-100**: Excellent symmetry, very balanced facial expression indicating high focus
+- **70-90**: Good symmetry, balanced expression indicating engaged attention
+- **50-70**: Moderate symmetry, some asymmetry but generally attentive
+- **30-50**: Poor symmetry, noticeable asymmetry indicating possible distraction or discomfort
+- **0-30**: Very poor symmetry, significant asymmetry indicating distraction, discomfort, or lack of focus
 
-**Business Context**: Symmetric facial pose indicates engagement and mirroring behavior (subconscious mimicry of the speaker).
+**Business Context**: Symmetric facial expressions indicate focused engagement and attentiveness. Asymmetric expressions may indicate distraction, discomfort, or lack of engagement. This metric measures the internal symmetry of a single person's face along the vertical center line, not interpersonal mirroring behavior. The scoring accounts for natural human facial asymmetry (most faces have 3-8% natural asymmetry).
 
 ---
 

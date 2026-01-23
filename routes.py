@@ -9,6 +9,7 @@ from flask import Blueprint, request, jsonify, send_from_directory, Response
 from services.azure_openai import openai_service
 from services.azure_speech import speech_service
 from utils.helpers import build_config_response
+from utils.face_detection_preference import get_face_detection_method, set_face_detection_method
 from engagement_state_detector import EngagementStateDetector, EngagementLevel, VideoSourceType
 from utils.context_generator import ContextGenerator
 from utils import signifier_weights
@@ -355,19 +356,29 @@ def get_all_config():
     return jsonify(build_config_response())
 
 
-@api.route("/config/face-detection", methods=["GET"])
-def get_face_detection_config():
+@api.route("/config/face-detection", methods=["GET", "PUT"])
+def face_detection_config():
     """
-    Get face detection configuration.
-    
-    Returns:
-        JSON: {
-            "method": "mediapipe" | "azure_face_api",
-            "mediapipeAvailable": true,
-            "azureFaceApiAvailable": true/false
-        }
+    GET: Face detection configuration. "method" is the active backend (from toggle or config).
+    PUT: Set method. Body: {"method": "mediapipe" | "azure_face_api"}. Only one backend is used at a time.
     """
-    return jsonify(config.get_face_detection_config())
+    if request.method == "GET":
+        cfg = dict(config.get_face_detection_config())
+        cfg["method"] = get_face_detection_method()
+        return jsonify(cfg)
+    if request.method == "PUT":
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        data = request.get_json(silent=True) or {}
+        method = data.get("method")
+        if not method:
+            return jsonify({"error": "Missing 'method'"}), 400
+        try:
+            set_face_detection_method(method)
+            return jsonify({"method": get_face_detection_method()})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+    return jsonify({"error": "Method not allowed"}), 405
 
 
 @api.route("/config/azure-face-api", methods=["GET"])
@@ -466,7 +477,8 @@ def start_engagement_detection():
     data = request.get_json(silent=True) or {}
     source_type_str = data.get("sourceType", "webcam").lower()
     source_path = data.get("sourcePath")
-    detection_method = data.get("detectionMethod")  # Optional override
+    # Use request override, else runtime preference (toggle), else config default. Only one backend at a time.
+    detection_method = data.get("detectionMethod") or get_face_detection_method()
     
     # Map string to enum
     source_type_map = {

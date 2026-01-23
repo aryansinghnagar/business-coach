@@ -12,7 +12,7 @@ var SIGNIFIER_LABELS = {
     g1_eye_contact: 'Sustained Eye Contact',
     g1_head_tilt: 'Head Tilt (Lateral)',
     g1_forward_lean: 'Forward Lean',
-    g1_mirroring: 'Mirroring',
+    g1_facial_symmetry: 'Facial Symmetry',
     g1_rhythmic_nodding: 'Rhythmic Nodding',
     g1_parted_lips: 'Parted Lips',
     g1_softened_forehead: 'Softened Forehead',
@@ -39,7 +39,7 @@ var SIGNIFIER_LABELS = {
 };
 
 var SIGNIFIER_GROUPS = [
-    { id: 'g1', title: 'Interest & Engagement', keys: ['g1_duchenne', 'g1_pupil_dilation', 'g1_eyebrow_flash', 'g1_eye_contact', 'g1_head_tilt', 'g1_forward_lean', 'g1_mirroring', 'g1_rhythmic_nodding', 'g1_parted_lips', 'g1_softened_forehead'] },
+    { id: 'g1', title: 'Interest & Engagement', keys: ['g1_duchenne', 'g1_pupil_dilation', 'g1_eyebrow_flash', 'g1_eye_contact', 'g1_head_tilt', 'g1_forward_lean', 'g1_facial_symmetry', 'g1_rhythmic_nodding', 'g1_parted_lips', 'g1_softened_forehead'] },
     { id: 'g2', title: 'Cognitive Load', keys: ['g2_look_up_lr', 'g2_lip_pucker', 'g2_eye_squint', 'g2_thinking_brow', 'g2_chin_stroke', 'g2_stillness', 'g2_lowered_brow'] },
     { id: 'g3', title: 'Resistance & Objections', keys: ['g3_contempt', 'g3_nose_crinkle', 'g3_lip_compression', 'g3_eye_block', 'g3_jaw_clench', 'g3_rapid_blink', 'g3_gaze_aversion', 'g3_no_nod', 'g3_narrowed_pupils', 'g3_mouth_cover'] },
     { id: 'g4', title: 'Decision-Ready', keys: ['g4_relaxed_exhale', 'g4_fixed_gaze', 'g4_smile_transition'] }

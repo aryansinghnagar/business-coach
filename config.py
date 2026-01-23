@@ -51,7 +51,9 @@ AZURE_FACE_API_REGION: str = os.getenv("AZURE_FACE_API_REGION", "centralindia")
 # ============================================================================
 # Face Detection Configuration
 # ============================================================================
-# Options: "mediapipe" (default) or "azure_face_api"
+# Options: "mediapipe" (default, recommended) or "azure_face_api"
+# MediaPipe: Local processing, fast, 468 landmarks (default)
+# Azure Face API: Cloud-based, 27 landmarks + emotions (requires configuration)
 FACE_DETECTION_METHOD: str = os.getenv("FACE_DETECTION_METHOD", "mediapipe")
 
 # Lightweight mode: MediaPipe only, reduced buffer, process every 2nd frame.
@@ -469,10 +471,15 @@ def is_azure_face_api_enabled() -> bool:
     Returns:
         bool: True if all required Azure Face API settings are provided
     """
-    return bool(
-        AZURE_FACE_API_KEY
-        and AZURE_FACE_API_ENDPOINT
-    )
+    key_valid = bool(AZURE_FACE_API_KEY and AZURE_FACE_API_KEY.strip())
+    endpoint_valid = bool(AZURE_FACE_API_ENDPOINT and AZURE_FACE_API_ENDPOINT.strip())
+    
+    if not key_valid:
+        print("Warning: AZURE_FACE_API_KEY is not set or empty")
+    if not endpoint_valid:
+        print("Warning: AZURE_FACE_API_ENDPOINT is not set or empty")
+    
+    return key_valid and endpoint_valid
 
 
 def get_azure_face_api_config() -> dict:

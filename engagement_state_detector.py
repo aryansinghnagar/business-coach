@@ -27,6 +27,7 @@ from utils.context_generator import ContextGenerator, EngagementContext
 from utils.face_detection_interface import FaceDetectorInterface, FaceDetectionResult
 from utils.mediapipe_detector import MediaPipeFaceDetector
 from utils.azure_face_detector import AzureFaceAPIDetector
+from utils.azure_landmark_mapper import expand_azure_landmarks_to_mediapipe
 from utils.business_meeting_feature_extractor import BusinessMeetingFeatureExtractor
 from utils.expression_signifiers import ExpressionSignifierEngine
 from utils import signifier_weights
@@ -113,15 +114,19 @@ class EngagementStateDetector:
                              frame, and skip 100-feature extractor (for low-power devices).
         """
         self.lightweight_mode = bool(lightweight_mode)
+        self._min_face_confidence = min_face_confidence
         if self.lightweight_mode:
             detection_method = "mediapipe"
 
         if detection_method is None:
-            detection_method = config.FACE_DETECTION_METHOD.lower()
+            # Default to MediaPipe if not specified
+            detection_method = config.FACE_DETECTION_METHOD.lower() or "mediapipe"
 
         # Initialize face detector (lightweight forces MediaPipe)
         self.face_detector: Optional[FaceDetectorInterface] = None
-        
+        self._azure_consecutive_empty = 0
+        self._azure_fallback_threshold = 10  # switch to MediaPipe after this many empty Azure results
+
         if detection_method == "azure_face_api":
             try:
                 self.face_detector = AzureFaceAPIDetector()
@@ -205,6 +210,7 @@ class EngagementStateDetector:
         # Reset state tracking
         self.consecutive_no_face_frames = 0
         self._frame_count = 0
+        self._azure_consecutive_empty = 0
         self.score_history.clear()
         self.metrics_history.clear()
         self.signifier_engine.reset()
@@ -349,15 +355,41 @@ class EngagementStateDetector:
         
         # Detect faces using the configured detector
         face_results = self.face_detector.detect_faces(frame)
-        
+
+        # Runtime fallback: Azure repeatedly returning no faces -> switch to MediaPipe
+        if self.face_detector.get_name() == "azure_face_api":
+            if not face_results:
+                self._azure_consecutive_empty += 1
+                if self._azure_consecutive_empty >= self._azure_fallback_threshold:
+                    print(
+                        "Info: Azure Face API produced repeated empty results; "
+                        "switching to MediaPipe for face detection."
+                    )
+                    self.face_detector = MediaPipeFaceDetector(
+                        min_detection_confidence=self._min_face_confidence
+                    )
+                    self.detection_method = "mediapipe"
+                    self._azure_consecutive_empty = 0
+                    face_results = self.face_detector.detect_faces(frame)
+            else:
+                self._azure_consecutive_empty = 0
+
         if not face_results:
             self.consecutive_no_face_frames += 1
             if self.consecutive_no_face_frames >= self.max_no_face_frames:
                 self.consecutive_no_face_frames = 0
             return self._make_no_face_state()
-        
+
         face_result = face_results[0]
         landmarks = face_result.landmarks
+        if landmarks is None or landmarks.size == 0:
+            self.consecutive_no_face_frames += 1
+            return self._make_no_face_state()
+
+        # Azure 27-point landmarks: expand to MediaPipe 468 layout for signifiers/feature extractor
+        if self.face_detector.get_name() == "azure_face_api" and landmarks.shape[0] <= 27:
+            bbox = getattr(face_result, "bounding_box", None)
+            landmarks = expand_azure_landmarks_to_mediapipe(landmarks, bbox, frame.shape)
 
         if self.lightweight_mode:
             self.signifier_engine.update(landmarks, face_result, frame.shape)
@@ -434,7 +466,7 @@ class EngagementStateDetector:
             eye_contact=float(s.get("g1_eye_contact", 50.0)),
             facial_expressiveness=m("g1_duchenne", "g1_parted_lips", "g4_smile_transition", "g1_softened_forehead"),
             head_movement=m("g1_head_tilt", "g1_rhythmic_nodding", "g1_forward_lean"),
-            symmetry=float(s.get("g1_mirroring", 50.0)),
+            symmetry=float(s.get("g1_facial_symmetry", 50.0)),
             mouth_activity=float(s.get("g1_parted_lips", 50.0)),
         )
 

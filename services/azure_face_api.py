@@ -29,12 +29,36 @@ class AzureFaceAPIService:
                 "Please set AZURE_FACE_API_KEY and AZURE_FACE_API_ENDPOINT environment variables."
             )
         
-        self.api_key = config.AZURE_FACE_API_KEY
-        self.endpoint = config.AZURE_FACE_API_ENDPOINT.rstrip('/')
+        self.api_key = config.AZURE_FACE_API_KEY.strip() if config.AZURE_FACE_API_KEY else ""
+        self.endpoint = config.AZURE_FACE_API_ENDPOINT.strip().rstrip('/') if config.AZURE_FACE_API_ENDPOINT else ""
         self.region = config.AZURE_FACE_API_REGION
         
+        # Validate endpoint format
+        if not self.endpoint:
+            raise ValueError("Azure Face API endpoint is empty")
+        if not self.endpoint.startswith(("http://", "https://")):
+            raise ValueError(f"Invalid Azure Face API endpoint format: {self.endpoint}. Must start with http:// or https://")
+        
+        if not self.api_key:
+            raise ValueError("Azure Face API key is empty or invalid")
+        
         # Face detection endpoint
-        self.detect_url = f"{self.endpoint}/face/v1.0/detect"
+        # Format: {endpoint}/face/{apiVersion}/detect
+        # Azure supports v1.0 and v1.2 - v1.0 is more widely available
+        self.api_version = "v1.0"
+        
+        # Handle case where endpoint might already include /face
+        if "/face/" in self.endpoint.lower():
+            # Endpoint already includes /face/, just append version and /detect
+            if self.endpoint.endswith("/face") or self.endpoint.endswith("/face/"):
+                self.detect_url = f"{self.endpoint}/{self.api_version}/detect"
+            else:
+                # Extract base endpoint and reconstruct
+                base_endpoint = self.endpoint.split("/face")[0].rstrip('/')
+                self.detect_url = f"{base_endpoint}/face/{self.api_version}/detect"
+        else:
+            # Standard format: endpoint/face/v1.0/detect
+            self.detect_url = f"{self.endpoint}/face/{self.api_version}/detect"
         
         # Request headers
         self.headers = {
@@ -66,12 +90,48 @@ class AzureFaceAPIService:
         Raises:
             requests.RequestException: If the API call fails
         """
+        # Validate image
+        if image is None or image.size == 0:
+            raise ValueError("Invalid image: image is None or empty")
+        
+        if len(image.shape) != 3 or image.shape[2] != 3:
+            raise ValueError(f"Invalid image format: expected BGR image with shape (H, W, 3), got {image.shape}")
+        
+        # Azure Face API requirements:
+        # - Image size: 36x36 to 4096x4096 pixels
+        # - File size: < 6MB
+        h, w = image.shape[:2]
+        if h < 36 or w < 36:
+            raise ValueError(f"Image too small: {w}x{h}. Minimum size is 36x36 pixels")
+        if h > 4096 or w > 4096:
+            # Resize if too large
+            scale = min(4096 / w, 4096 / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            image = cv2.resize(image, (new_w, new_h))
+            h, w = new_h, new_w
+        
         # Convert BGR to RGB
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         # Encode image to JPEG
-        _, buffer = cv2.imencode('.jpg', rgb_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+        success, buffer = cv2.imencode('.jpg', rgb_image, encode_params)
+        
+        if not success or buffer is None:
+            raise ValueError("Failed to encode image to JPEG")
+        
         image_data = buffer.tobytes()
+        
+        # Check file size (Azure limit: 6MB)
+        if len(image_data) > 6 * 1024 * 1024:
+            # Reduce quality and retry
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
+            success, buffer = cv2.imencode('.jpg', rgb_image, encode_params)
+            if not success or buffer is None:
+                raise ValueError("Failed to encode image to JPEG (even with reduced quality)")
+            image_data = buffer.tobytes()
+            if len(image_data) > 6 * 1024 * 1024:
+                raise ValueError(f"Image file size too large: {len(image_data)} bytes. Maximum is 6MB")
         
         # Build request parameters
         params = {
@@ -90,17 +150,72 @@ class AzureFaceAPIService:
                 headers=self.headers,
                 params=params,
                 data=image_data,
-                timeout=5
+                timeout=10  # Increased timeout for reliability
             )
-            response.raise_for_status()
+            
+            # Check response status
+            if response.status_code != 200:
+                error_msg = f"Azure Face API returned status {response.status_code}"
+                try:
+                    error_body = response.json()
+                    if isinstance(error_body, dict) and "error" in error_body:
+                        error_info = error_body["error"]
+                        error_msg += f": {error_info.get('message', 'Unknown error')}"
+                        if "code" in error_info:
+                            error_msg += f" (code: {error_info['code']})"
+                except:
+                    error_msg += f": {response.text[:200]}"
+                
+                raise requests.RequestException(error_msg)
             
             faces = response.json()
-            return faces if isinstance(faces, list) else []
+            if not isinstance(faces, list):
+                raise ValueError(f"Unexpected response format: expected list, got {type(faces)}")
+            
+            return faces
         
-        except requests.RequestException as e:
+        except requests.Timeout:
             raise requests.RequestException(
-                f"Azure Face API request failed: {str(e)}"
+                f"Azure Face API request timed out after 10 seconds. "
+                f"Endpoint: {self.detect_url}"
             )
+        except requests.ConnectionError as e:
+            raise requests.RequestException(
+                f"Azure Face API connection error: {str(e)}. "
+                f"Check network connectivity and endpoint: {self.endpoint}"
+            )
+        except requests.RequestException as e:
+            # Re-raise with more context
+            raise requests.RequestException(
+                f"Azure Face API request failed: {str(e)}. "
+                f"Endpoint: {self.detect_url}, Image size: {w}x{h}"
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Unexpected error in Azure Face API detection: {str(e)}"
+            )
+    
+    def test_connection(self) -> bool:
+        """
+        Test Azure Face API connection with a simple request.
+        
+        Returns:
+            bool: True if connection is successful, False otherwise
+        """
+        try:
+            # Create a minimal test image (1x1 pixel, but Azure requires at least 36x36)
+            # So we'll create a 36x36 test image
+            test_image = np.ones((36, 36, 3), dtype=np.uint8) * 128  # Gray image
+            
+            # Try to detect faces (will likely return empty, but tests connectivity)
+            result = self.detect_faces(test_image, return_face_landmarks=False, return_face_attributes=False)
+            return True  # If we get here, connection works (even if no faces found)
+        except requests.RequestException as e:
+            print(f"Azure Face API connection test failed: {e}")
+            return False
+        except Exception as e:
+            print(f"Azure Face API connection test error: {e}")
+            return False
     
     def extract_landmarks_from_face(
         self,
@@ -123,11 +238,15 @@ class AzureFaceAPIService:
         
         landmarks = face_data["faceLandmarks"]
         
+        if not isinstance(landmarks, dict):
+            return None
+        
         # Azure Face API provides 27 landmarks with x, y coordinates
         # We'll extract all available landmarks
         landmark_points = []
         
         # Key landmarks in Azure Face API (27 total)
+        # Order matters for compatibility with MediaPipe mapping
         landmark_keys = [
             "pupilLeft", "pupilRight",
             "noseTip", "mouthLeft", "mouthRight",
@@ -145,9 +264,17 @@ class AzureFaceAPIService:
         for key in landmark_keys:
             if key in landmarks:
                 point = landmarks[key]
-                landmark_points.append([point["x"], point["y"]])
+                if isinstance(point, dict) and "x" in point and "y" in point:
+                    try:
+                        x = float(point["x"])
+                        y = float(point["y"])
+                        landmark_points.append([x, y])
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Invalid landmark point for {key}: {point}, error: {e}")
+                        continue
         
-        if not landmark_points:
+        if len(landmark_points) < 10:  # Need at least 10 landmarks for basic detection
+            print(f"Warning: Insufficient landmarks extracted: {len(landmark_points)}/27")
             return None
         
         return np.array(landmark_points, dtype=np.float32)
@@ -236,8 +363,17 @@ def get_azure_face_api_service() -> Optional[AzureFaceAPIService]:
         if config.is_azure_face_api_enabled():
             try:
                 azure_face_api_service = AzureFaceAPIService()
-            except Exception as e:
-                print(f"Warning: Failed to initialize Azure Face API service: {e}")
+                print(f"Azure Face API service initialized successfully. Endpoint: {azure_face_api_service.endpoint}")
+            except ValueError as e:
+                print(f"Error: Azure Face API configuration issue: {e}")
                 return None
+            except Exception as e:
+                import traceback
+                print(f"Error: Failed to initialize Azure Face API service: {e}")
+                print(f"Traceback: {traceback.format_exc()}")
+                return None
+        else:
+            print("Warning: Azure Face API is not enabled in configuration")
+            return None
     
     return azure_face_api_service
