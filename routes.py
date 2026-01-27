@@ -14,6 +14,7 @@ from engagement_state_detector import EngagementStateDetector, EngagementLevel, 
 from utils.context_generator import ContextGenerator
 from utils import signifier_weights
 from typing import Optional
+import time
 import config
 
 
@@ -165,16 +166,18 @@ def chat_stream():
     if not messages:
         return jsonify({"error": "Missing messages"}), 400
     
-    # Automatically include engagement context if available
+    # Automatically include engagement context if available (only when last user message is plain text)
     if include_engagement and engagement_detector:
         try:
             state = engagement_detector.get_current_state()
             if state and state.face_detected:
                 engagement_context = context_generator.format_for_ai(state.context)
-                # Prepend engagement context to the first user message
                 if messages and messages[-1].get("role") == "user":
-                    engagement_msg = f"[MEETING CONTEXT]\n{engagement_context}\n[/MEETING CONTEXT]\n\n"
-                    messages[-1]["content"] = engagement_msg + str(messages[-1]["content"])
+                    content = messages[-1].get("content")
+                    # Only prepend to string content so we don't corrupt multimodal (array) messages
+                    if isinstance(content, str):
+                        engagement_msg = f"[MEETING CONTEXT]\n{engagement_context}\n[/MEETING CONTEXT]\n\n"
+                        messages[-1]["content"] = engagement_msg + content
         except Exception as e:
             # If engagement context fails, continue without it
             print(f"Warning: Could not include engagement context: {e}")
@@ -568,6 +571,42 @@ def upload_video_file():
             "error": "Failed to upload video file",
             "details": str(e)
         }), 500
+
+
+@api.route("/engagement/video-feed", methods=["GET"])
+def engagement_video_feed():
+    """
+    Stream the engagement detection video source as MJPEG.
+
+    Returns:
+        Response: multipart/x-mixed-replace stream of JPEG frames when
+        engagement is running; 404 when not.
+    """
+    global engagement_detector
+
+    if not engagement_detector or not engagement_detector.is_running:
+        return jsonify({"error": "Engagement detection not started"}), 404
+
+    boundary = b"frame"
+
+    def generate():
+        while True:
+            jpeg = engagement_detector.get_last_frame_jpeg()
+            if jpeg:
+                part = (
+                    b"--" + boundary + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                    + jpeg + b"\r\n"
+                )
+                yield part
+            time.sleep(0.033)  # ~30 FPS
+
+    return Response(
+        generate(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @api.route("/engagement/stop", methods=["POST"])

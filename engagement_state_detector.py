@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Callable, Tuple, List
 import numpy as np
+import cv2
 import config
 from utils.video_source_handler import VideoSourceHandler, VideoSourceType
 from utils.engagement_scorer import EngagementScorer, EngagementMetrics
@@ -189,6 +190,21 @@ class EngagementStateDetector:
         self._plateau_mean_min: float = 25.0 # ignore very low plateaus (likely no face / noise)
         self._frame_count: int = 0
 
+        # Last frame for video-feed streaming (thread-safe)
+        self._last_frame: Optional[np.ndarray] = None
+        self._last_frame_lock = threading.Lock()
+
+    def get_last_frame_jpeg(self) -> Optional[bytes]:
+        """
+        Return the most recent video frame as JPEG bytes for the engagement video feed.
+        Thread-safe; returns None if no frame is available.
+        """
+        with self._last_frame_lock:
+            if self._last_frame is None:
+                return None
+            _, buf = cv2.imencode(".jpg", self._last_frame)
+            return buf.tobytes()
+
     def start_detection(
         self,
         source_type: VideoSourceType = VideoSourceType.WEBCAM,
@@ -308,7 +324,11 @@ class EngagementStateDetector:
                         self.consecutive_no_face_frames = 0
                     time.sleep(0.033)  # ~30 FPS
                     continue
-                
+
+                # Update last frame for video-feed streaming (thread-safe)
+                with self._last_frame_lock:
+                    self._last_frame = frame.copy()
+
                 # Process frame and update state
                 state = self._process_frame(frame)
                 

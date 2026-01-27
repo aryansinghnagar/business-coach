@@ -671,6 +671,42 @@
                 inset 0 0 0 1px rgba(255, 255, 255, 0.15);
         }
         
+        .engagement-feed-wrap {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+        }
+        
+        .engagement-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .avatar-pip {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            width: 22%;
+            min-width: 140px;
+            max-width: 200px;
+            aspect-ratio: 16/9;
+            z-index: 5;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+        }
+        
+        .avatar-pip video,
+        .avatar-pip audio {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
         #remoteVideo video {
             width: 100%;
             height: 100%;
@@ -1012,6 +1048,10 @@
                         <div class="engagement-level-indicator" id="engagementLevel">--</div>
                     </div>
                     <div id="remoteVideo" style="position: relative; flex: 1;">
+                        <div id="engagementFeedWrap" class="engagement-feed-wrap" style="display:none;">
+                            <img id="engagementFeed" class="engagement-feed" alt="Engagement video feed" />
+                        </div>
+                        <div id="avatarPip" class="avatar-pip"></div>
                         <div id="subtitles" hidden></div>
                     </div>
                 </div>
@@ -1153,8 +1193,34 @@
         }
         
         // ========================================================================
-        // Video Source Selection
+        // Video Source Selection & Engagement Feed Display
         // ========================================================================
+        
+        var apiBaseUrl = 'http://localhost:5000';
+        
+        /**
+         * Show the engagement detection video feed in the main display area.
+         */
+        function showEngagementFeed() {
+            var el = document.getElementById('engagementFeed');
+            if (el) {
+                var base = (sessionManager && sessionManager.apiBaseUrl) ? sessionManager.apiBaseUrl : apiBaseUrl;
+                el.src = base + '/engagement/video-feed';
+                el.style.display = 'block';
+            }
+            var wrap = document.getElementById('engagementFeedWrap');
+            if (wrap) wrap.style.display = 'block';
+        }
+        
+        /**
+         * Hide the engagement feed and stop requesting frames.
+         */
+        function hideEngagementFeed() {
+            var el = document.getElementById('engagementFeed');
+            if (el) { el.src = ''; el.style.display = 'none'; }
+            var wrap = document.getElementById('engagementFeedWrap');
+            if (wrap) wrap.style.display = 'none';
+        }
         
         /**
          * Prompt user to select video source for engagement detection.
@@ -1171,9 +1237,11 @@
                 console.warn('Video source selector not initialized');
                 // Fallback to default (stream) with MediaPipe if systems are ready
                 if (sessionManager) {
-                    sessionManager.startSession('stream', null, 'mediapipe').catch(err => {
-                        console.warn('Could not start parallel session:', err);
-                    });
+                    sessionManager.startSession('stream', null, 'mediapipe')
+                        .then(function () { showEngagementFeed(); })
+                        .catch(err => {
+                            console.warn('Could not start parallel session:', err);
+                        });
                 }
                 return;
             }
@@ -1231,9 +1299,8 @@
                 
                 if (sessionManager) {
                     await sessionManager.startSession(sourceType, finalSourcePath, selectedDetectionMethod);
+                    showEngagementFeed();
                     console.log(`Engagement detection started with source: ${sourceType}, method: ${selectedDetectionMethod}`);
-                    
-                    // Show success message
                     console.log('✓ Video source selected and engagement detection started');
                 }
             } catch (error) {
@@ -1375,7 +1442,8 @@
                 }]
             })
 
-            // Handle audio and video tracks from avatar
+            // Handle audio and video tracks from avatar (append to avatar PIP; main area shows engagement feed)
+            var avatarContainer = function () { return document.getElementById('avatarPip'); };
             peerConnection.ontrack = function (event) {
                 if (event.track.kind === 'audio') {
                     let audioElement = document.createElement('audio')
@@ -1388,15 +1456,12 @@
                     audioElement.onplaying = () => {
                         console.log(`WebRTC ${event.track.kind} channel connected.`)
                     }
-
-                    let remoteVideoDiv = document.getElementById('remoteVideo')
-                    // Remove existing audio element if present
-                    for (var i = 0; i < remoteVideoDiv.childNodes.length; i++) {
-                        if (remoteVideoDiv.childNodes[i].localName === 'audio') {
-                            remoteVideoDiv.removeChild(remoteVideoDiv.childNodes[i])
-                        }
+                    var pip = avatarContainer()
+                    if (pip) {
+                        var existing = pip.querySelector('audio')
+                        if (existing) existing.remove()
+                        pip.appendChild(audioElement)
                     }
-                    document.getElementById('remoteVideo').appendChild(audioElement)
                 }
 
                 if (event.track.kind === 'video') {
@@ -1408,20 +1473,16 @@
                         videoElement.play()
                     })
                     videoElement.playsInline = true
-                    videoElement.style.width = '0.5px'
-                    document.getElementById('remoteVideo').appendChild(videoElement)
+                    videoElement.style.width = '100%'
+                    videoElement.style.height = '100%'
+                    var pip = avatarContainer()
+                    if (pip) {
+                        var existing = pip.querySelector('video')
+                        if (existing) existing.remove()
+                        pip.appendChild(videoElement)
+                    }
 
                     videoElement.onplaying = () => {
-                        let remoteVideoDiv = document.getElementById('remoteVideo')
-                        // Remove existing video element if present
-                        for (var i = 0; i < remoteVideoDiv.childNodes.length; i++) {
-                            if (remoteVideoDiv.childNodes[i].localName === 'video') {
-                                remoteVideoDiv.removeChild(remoteVideoDiv.childNodes[i])
-                            }
-                        }
-                        videoElement.style.width = '100%'
-                        document.getElementById('remoteVideo').appendChild(videoElement)
-
                         console.log(`WebRTC ${event.track.kind} channel connected.`)
                         avatarAudioInitialized = true
                         sessionActive = true
@@ -1431,9 +1492,9 @@
                         document.getElementById('userMessageInput').disabled = false
                         document.getElementById('sendMessageBtn').disabled = false
                         document.getElementById('userMessageInput').focus()
-                        
-                        // Video source should already be selected from initial prompt
-                        // Only prompt again if it wasn't shown initially
+                        if (sessionManager) {
+                            sessionManager.isAvatarInitialized = true;
+                        }
                         if (!videoSourcePromptShown && videoSourceSelector) {
                             promptVideoSourceSelection();
                         }
@@ -1487,7 +1548,9 @@
                         });
                         console.log('Avatar chat manager initialized');
                     }
-                    
+                    if (sessionManager) {
+                        sessionManager.isAvatarInitialized = true;
+                    }
                     avatarAudioInitialized = true;
                     sessionActive = true;
                 } else {
@@ -1541,13 +1604,10 @@
             sessionActive = false;
             avatarAudioInitialized = false;
             
-            // Clear video element
-            let remoteVideoDiv = document.getElementById('remoteVideo');
-            while (remoteVideoDiv.firstChild) {
-                if (remoteVideoDiv.firstChild.id !== 'subtitles') {
-                    remoteVideoDiv.removeChild(remoteVideoDiv.firstChild);
-                }
-            }
+            // Stop engagement feed and clear avatar PIP (keep layout structure)
+            hideEngagementFeed();
+            let avatarPipEl = document.getElementById('avatarPip');
+            if (avatarPipEl) avatarPipEl.innerHTML = '';
             
             // Update UI
             document.getElementById('initAvatar').disabled = false;

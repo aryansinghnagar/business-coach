@@ -108,11 +108,13 @@ class SessionManager {
     
     /**
      * Check if streaming should continue.
-     * 
+     * Streaming continues when avatar is ready and/or engagement session is active,
+     * so chat works as soon as the avatar is initialized (even before video source is picked).
+     *
      * @returns {boolean} True if streaming should continue
      */
     shouldContinueStreaming() {
-        return !this.shouldStopStreaming && this.isSessionActive;
+        return !this.shouldStopStreaming && (this.isSessionActive || this.isAvatarInitialized);
     }
     
     /**
