@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Engagement State Detection System is an advanced feature of the Business Meeting Copilot that analyzes video feeds in real-time to determine how engaged meeting participants are. Using advanced facial recognition technology (MediaPipe), the system extracts 100 key facial features and computes an engagement score from 0 to 100, providing actionable insights to help optimize your business meetings.
+The Engagement State Detection System is an advanced feature of the Business Meeting Copilot that analyzes video feeds in real-time to determine how engaged meeting participants are. It uses **MediaPipe** by default (local, 468 landmarks) or optionally **Azure Face API** (cloud, 27 landmarks + emotions). The pipeline computes 30 expression signifiers and aggregates them into an engagement score (0–100), providing actionable insights to help optimize your business meetings.
 
 ## What is Engagement Detection?
 
@@ -17,9 +17,9 @@ Engagement detection analyzes facial expressions, eye contact, head movements, a
 
 ### Technical Process
 
-1. **Video Capture**: The system captures video from your selected source (webcam, video file, or stream)
-2. **Face Detection**: MediaPipe Face Mesh detects and tracks faces in the video feed
-3. **Feature Extraction**: 100 key facial features are extracted, including:
+1. **Video Capture**: The system captures video from your selected source (webcam, video file, or stream).
+2. **Face Detection**: MediaPipe (default) or Azure Face API detects and tracks faces. MediaPipe outputs 468 landmarks; Azure 27 landmarks are expanded to a compatible format.
+3. **Feature Extraction & Signifiers**: Features and 30 expression signifiers are computed, including:
    - Eye openness and movement
    - Eyebrow position
    - Mouth activity and expressions
@@ -59,15 +59,19 @@ When you initialize an avatar session and video becomes available, engagement de
 You can manually start detection by calling the API endpoint:
 
 ```javascript
-// Start detection from webcam
+// Start detection from webcam (MediaPipe is default)
 fetch('http://localhost:5000/engagement/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-        sourceType: 'webcam'  // or 'file' or 'stream'
+        sourceType: 'webcam',   // or 'file' or 'stream'
+        sourcePath: null,      // required for 'file' / 'stream'
+        detectionMethod: 'mediapipe'  // or 'azure_face_api' (optional; default from config)
     })
 })
 ```
+
+When using the video source selection modal in the app, you can choose **MediaPipe (Default)** or **Azure Face API** as the face detection method before starting detection.
 
 #### Supported Video Sources
 

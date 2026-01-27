@@ -281,7 +281,7 @@ class ExpressionSignifierEngine:
         out["g1_duchenne"] = self._g1_duchenne(lm, cur, buf)
         out["g1_pupil_dilation"] = self._g1_pupil_dilation(cur)
         out["g1_eyebrow_flash"] = self._g1_eyebrow_flash(buf)
-        out["g1_eye_contact"] = self._g1_eye_contact(cur, w, h)
+        out["g1_eye_contact"] = self._g1_eye_contact(cur, w, h, buf)
         out["g1_head_tilt"] = self._g1_head_tilt(cur)
         out["g1_forward_lean"] = self._g1_forward_lean(cur)
         out["g1_facial_symmetry"] = self._g1_facial_symmetry(lm, buf)
@@ -496,7 +496,16 @@ class ExpressionSignifierEngine:
             return 50.0 + min(20.0, raise_magnitude * 50.0)  # 50-70
         return 50.0
 
-    def _g1_eye_contact(self, cur: dict, w: int, h: int) -> float:
+    def _g1_eye_contact(self, cur: dict, w: int, h: int, buf: list) -> float:
+        """
+        Sustained Eye Contact: Measures gaze direction quality and rewards sustained periods.
+        
+        Calculation:
+        - Base score from current frame's gaze direction and head orientation
+        - Tracks eye contact history over recent frames (last 30 frames ~1 second)
+        - Rewards sustained periods: score increases when good eye contact is maintained
+        - Uses exponential moving average for smooth transitions
+        """
         # Eye contact: gaze direction + head orientation both toward camera
         gx, gy = cur.get("gaze_x", 0), cur.get("gaze_y", 0)
         yaw = cur.get("yaw", 0)
@@ -514,8 +523,71 @@ class ExpressionSignifierEngine:
         # Combine: gaze quality (0-100) penalized by head orientation
         gaze_score = (1.0 - gaze_normalized) * 100.0
         head_penalty = (yaw_penalty + pitch_penalty) / 2.0
-        final_score = gaze_score * (1.0 - head_penalty * 0.6)  # Head orientation can reduce by up to 60%
+        base_score = gaze_score * (1.0 - head_penalty * 0.6)  # Head orientation can reduce by up to 60%
         
+        # Track sustained eye contact over time
+        if len(buf) < 2:
+            return float(max(0.0, min(100.0, base_score)))
+        
+        # Look at recent eye contact history (last 30 frames ~1 second at 30fps)
+        recent_frames = buf[-30:] if len(buf) >= 30 else buf
+        
+        # Calculate eye contact quality for each recent frame
+        frame_scores = []
+        for frame in recent_frames:
+            gx_f = frame.get("gaze_x", 0)
+            gy_f = frame.get("gaze_y", 0)
+            yaw_f = frame.get("yaw", 0)
+            pitch_f = frame.get("pitch", 0)
+            face_scale_f = frame.get("face_scale", 50.0)
+            
+            gaze_dist_f = np.sqrt(gx_f * gx_f + gy_f * gy_f)
+            gaze_norm_f = min(1.0, gaze_dist_f / max(face_scale_f * 0.4, 1e-6))
+            yaw_pen_f = min(1.0, abs(yaw_f) / 30.0)
+            pitch_pen_f = min(1.0, abs(pitch_f) / 20.0)
+            gaze_score_f = (1.0 - gaze_norm_f) * 100.0
+            head_pen_f = (yaw_pen_f + pitch_pen_f) / 2.0
+            frame_score = gaze_score_f * (1.0 - head_pen_f * 0.6)
+            frame_scores.append(frame_score)
+        
+        # Count consecutive frames with good eye contact (score > 60) from current frame backwards
+        sustained_period = 0
+        for score in reversed(frame_scores):
+            if score > 60.0:
+                sustained_period += 1
+            else:
+                break  # Break in eye contact, stop counting
+        
+        # Calculate average eye contact quality over recent frames
+        avg_recent_score = np.mean(frame_scores) if frame_scores else base_score
+        
+        # Reward sustained periods: increase score based on duration
+        # The longer eye contact is maintained, the higher the bonus
+        # 0-5 frames: no bonus (base score)
+        # 6-15 frames: +5 to +20 bonus
+        # 16-25 frames: +20 to +30 bonus
+        # 26+ frames: +30 to +35 bonus (max)
+        if sustained_period >= 26:
+            sustained_bonus = 35.0
+        elif sustained_period >= 16:
+            sustained_bonus = 20.0 + (sustained_period - 16) * 1.5  # 20-35
+        elif sustained_period >= 6:
+            sustained_bonus = 5.0 + (sustained_period - 6) * 1.5  # 5-20
+        else:
+            sustained_bonus = 0.0
+        
+        # Reward consistency: if average recent score is high, add bonus
+        # This rewards sustained good eye contact even if current frame is slightly lower
+        if avg_recent_score > 70.0:
+            consistency_bonus = min(10.0, (avg_recent_score - 70.0) / 30.0 * 10.0)  # Up to +10
+        else:
+            consistency_bonus = 0.0
+        
+        # Combine: base score (current frame) + sustained period bonus + consistency bonus
+        # Add bonuses directly to base score, but cap at 100
+        final_score = base_score + sustained_bonus + consistency_bonus
+        
+        # Ensure we don't exceed 100
         return float(max(0.0, min(100.0, final_score)))
 
     def _g1_head_tilt(self, cur: dict) -> float:
@@ -742,25 +814,89 @@ class ExpressionSignifierEngine:
         return 45.0  # Looking forward
 
     def _g2_lip_pucker(self, lm: np.ndarray, cur: dict) -> float:
-        # Lip pucker: cognitive processing (thinking, evaluating)
+        """
+        Lip Pucker: Detects pursed lips (thinking, evaluating expression).
+        
+        Lip pucker is characterized by:
+        - High MAR (mouth aspect ratio - vertical opening relative to width)
+        - Narrow mouth width (lips pursed together)
+        - Both conditions must be met for a pucker
+        
+        Returns 0-100 where:
+        - 0-30: No pucker (normal mouth)
+        - 30-60: Slight pucker
+        - 60-80: Moderate pucker
+        - 80-100: Strong pucker
+        """
         mar = cur.get("mar", 0.2)
         face_scale = cur.get("face_scale", 50.0)
         mw = cur.get("mouth_w", 40.0)
         
-        # Pucker: high MAR (vertical stretch) relative to mouth width
-        # Normalize mouth width by face scale
+        # Normalize mouth width by face scale for size invariance
         mw_normalized = mw / max(face_scale, 1e-6)
         
-        # Pucker indicators:
-        # 1. High MAR (>0.3) with relatively narrow mouth
-        # 2. MAR significantly elevated for the mouth size
-        if mar > 0.35 and mw_normalized < 0.15:  # Very high MAR, narrow mouth
-            return 75.0
-        elif mar > 0.30 and mw_normalized < 0.20:
-            return 60.0 + (mar - 0.30) / 0.05 * 10.0  # 60-70
-        elif mar > 0.25:
-            return 50.0 + (mar - 0.25) / 0.10 * 15.0  # 50-65
-        return 40.0
+        # Normal mouth characteristics:
+        # - MAR typically 0.15-0.25 for relaxed/neutral mouth
+        # - Mouth width normalized: typically 0.20-0.35 of face scale
+        
+        # Lip pucker requires BOTH:
+        # 1. High MAR (vertical opening) - indicates lips are pursed forward
+        # 2. Narrow mouth width - indicates lips are compressed horizontally
+        
+        # No pucker: normal MAR and normal width
+        if mar <= 0.25 and mw_normalized >= 0.18:
+            # Normal mouth, no pucker
+            return 10.0 + (mar / 0.25) * 10.0  # 10-20 (slight variation for natural range)
+        
+        # Slight pucker: elevated MAR OR narrow width, but not both strongly
+        if mar <= 0.30:
+            # MAR not high enough for pucker
+            if mw_normalized < 0.15:
+                # Narrow but not puckered (might be speaking or other expression)
+                return 20.0 + (0.30 - mar) / 0.05 * 10.0  # 20-30
+            else:
+                # Normal mouth
+                return 5.0 + (mar / 0.30) * 15.0  # 5-20
+        
+        # Moderate to strong pucker: requires both high MAR AND narrow width
+        # Check if mouth is actually narrow (pursed)
+        if mw_normalized >= 0.20:
+            # Mouth too wide for pucker, even with high MAR (might be yawning or speaking)
+            return 15.0 + min(15.0, (mar - 0.30) / 0.10 * 15.0)  # 15-30
+        
+        # We have high MAR (>0.30) AND narrow mouth (<0.20 normalized width)
+        # This indicates actual lip pucker
+        
+        # Strong pucker: very high MAR with very narrow mouth
+        if mar > 0.40 and mw_normalized < 0.12:
+            # Very strong pucker
+            pucker_intensity = min(1.0, (mar - 0.40) / 0.15)  # 0-1 for mar 0.40-0.55
+            return 85.0 + pucker_intensity * 15.0  # 85-100
+        
+        # Moderate pucker: high MAR with narrow mouth
+        elif mar > 0.35 and mw_normalized < 0.15:
+            # Strong pucker
+            pucker_intensity = (mar - 0.35) / 0.05  # 0-1 for mar 0.35-0.40
+            return 70.0 + pucker_intensity * 15.0  # 70-85
+        
+        # Moderate pucker: elevated MAR with narrow mouth
+        elif mar > 0.30 and mw_normalized < 0.18:
+            # Moderate pucker
+            mar_factor = (mar - 0.30) / 0.05  # 0-1 for mar 0.30-0.35
+            width_factor = (0.18 - mw_normalized) / 0.06  # 0-1 for width 0.12-0.18
+            pucker_intensity = (mar_factor + width_factor) / 2.0
+            return 50.0 + pucker_intensity * 20.0  # 50-70
+        
+        # Borderline: high MAR but width not narrow enough, or narrow but MAR not high enough
+        else:
+            # Slight pucker or ambiguous
+            mar_contribution = max(0.0, (mar - 0.25) / 0.10)  # 0-1 for mar 0.25-0.35
+            width_contribution = max(0.0, (0.20 - mw_normalized) / 0.08)  # 0-1 for width 0.12-0.20
+            combined = (mar_contribution + width_contribution) / 2.0
+            return 30.0 + combined * 20.0  # 30-50
+        
+        # Fallback (shouldn't reach here)
+        return 10.0
 
     def _g2_eye_squint(self, cur: dict) -> float:
         ear = cur.get("ear", 0.2)

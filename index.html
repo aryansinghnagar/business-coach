@@ -1467,8 +1467,10 @@
                 console.log("WebRTC status: " + peerConnection.iceConnectionState)
             }
 
-            // Add transceivers for both audio and video
-            peerConnection.addTransceiver('video', { direction: 'sendrecv' })
+            // Video: recvonly so we only receive the avatar stream—avoids requesting the user's
+            // camera and prevents conflict with engagement detection (backend cv2.VideoCapture).
+            // Audio: sendrecv for user mic → avatar and avatar → user.
+            peerConnection.addTransceiver('video', { direction: 'recvonly' })
             peerConnection.addTransceiver('audio', { direction: 'sendrecv' })
 
             // Start avatar synthesizer

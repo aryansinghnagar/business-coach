@@ -7,25 +7,42 @@ business-meeting-copilot/
 ├── app.py                              # Main Flask application (entry point)
 ├── config.py                           # Centralized configuration management
 ├── routes.py                           # All Flask route handlers
-├── engagement_state_detector.py         # Engagement detection system
+├── gui_launcher.py                     # GUI launcher (start/stop server)
+├── engagement_state_detector.py        # Engagement detection orchestration
 ├── requirements.txt                    # Python dependencies
 ├── index.html                          # Frontend interface
+├── static/js/                          # Frontend modules
+│   ├── session-manager.js              # Session lifecycle, avatar + engagement
+│   ├── avatar-chat-manager.js          # Chat, streaming, speech
+│   ├── engagement-detector.js          # Engagement API polling
+│   ├── engagement-bar.js              # Engagement bar UI
+│   ├── signifier-panel.js             # 30 signifiers panel
+│   └── video-source-selector.js       # Video source + face detection method
 │
 ├── services/                           # Service layer (business logic)
 │   ├── __init__.py
-│   ├── azure_openai.py                # Azure OpenAI integration
-│   ├── azure_speech.py                # Azure Speech Service integration
-│   └── azure_face_api.py              # Azure Face API integration
+│   ├── azure_openai.py                 # Azure OpenAI integration
+│   ├── azure_speech.py                 # Azure Speech Service integration
+│   └── azure_face_api.py               # Azure Face API integration
 │
-└── utils/                              # Utility functions
-    ├── __init__.py
-    ├── helpers.py                      # Helper functions
-    ├── video_source_handler.py         # Video source abstraction
-    ├── engagement_scorer.py            # Engagement scoring algorithms
-    ├── context_generator.py            # Context generation for AI
-    ├── face_detection_interface.py     # Face detection abstraction
-    ├── mediapipe_detector.py           # MediaPipe face detector
-    └── azure_face_detector.py          # Azure Face API detector
+├── utils/                              # Utilities and detection/scoring
+│   ├── __init__.py
+│   ├── helpers.py                      # Helpers, build_config_response
+│   ├── video_source_handler.py         # Video source (webcam/file/stream)
+│   ├── engagement_scorer.py           # EngagementMetrics, composite score
+│   ├── context_generator.py           # EngagementContext for AI
+│   ├── face_detection_interface.py    # FaceDetectorInterface
+│   ├── mediapipe_detector.py          # MediaPipe face detector (468 pts)
+│   ├── azure_face_detector.py         # Azure Face API detector (27 pts)
+│   ├── azure_landmark_mapper.py       # Expand Azure 27 → MediaPipe-like 468
+│   ├── face_detection_preference.py   # Runtime MediaPipe vs Azure preference
+│   ├── business_meeting_feature_extractor.py  # 100 blendshape-style features
+│   ├── expression_signifiers.py       # 30 expression signifiers (0–100)
+│   ├── signifier_weights.py           # Weights for signifiers and groups
+│   └── engagement_levels.py           # EngagementLevel enum helpers
+│
+└── weights/                            # Optional ML/signifier weights
+    └── signifier_weights.json         # signifier [30], group [4]
 ```
 
 ## Design Principles

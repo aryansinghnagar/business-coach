@@ -9,6 +9,7 @@ The Business Meeting Copilot now includes a user-friendly modal interface for se
 ### 1. **Modal Interface**
 - Clean, modern modal design
 - Three video source options with clear descriptions
+- **Face Detection Method**: Choose **MediaPipe (Default)** or **Azure Face API** before starting. MediaPipe is default and recommended; Azure is shown only when configured.
 - File upload support for local video files
 - Keyboard navigation (Escape to close)
 - Click outside to cancel
@@ -77,7 +78,8 @@ Located in `static/js/video-source-selector.js`
 const selector = new VideoSourceSelector({
     onSelect: (selection) => {
         // Handle selection
-        const { sourceType, sourcePath, file } = selection;
+        const { sourceType, sourcePath, file, detectionMethod } = selection;
+        // detectionMethod: 'mediapipe' (default) or 'azure_face_api'
     },
     onCancel: () => {
         // Handle cancellation

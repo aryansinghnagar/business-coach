@@ -14,7 +14,9 @@
 
 4. **Click "🌐 Open in Browser"** button
 
-5. **When done, click "■ Stop Server"**
+5. **In the browser**: Initialize Avatar Session if needed. When the video source modal appears, choose Webcam / Meeting Partner Video / File, pick **MediaPipe (Default)** or **Azure Face API**, then "Start Detection".
+
+6. **When done, click "■ Stop Server"**
 
 ### Mac/Linux Users
 

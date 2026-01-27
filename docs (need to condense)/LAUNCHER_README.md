@@ -88,6 +88,15 @@ sudo yum install python3-tkinter  # CentOS/RHEL
 - Server output is captured and displayed in real-time
 - The launcher will attempt to stop the server when closed
 
+## Stopping and Restarting
+
+- **GUI**: Click "■ Stop Server", then "▶ Start Server".
+- **Batch scripts**: Use `stop_server.bat` to stop, `restart_server.bat` to restart.
+- **Command line**: Stop with `taskkill /F /IM python.exe` (or find PID on port 5000 and kill it). Start with `python app.py`.
+- **Task Manager**: End `python.exe` processes if needed, then start again via launcher or `python app.py`.
+
+**Port 5000 still in use:** Wait a few seconds after stopping, or check with `netstat -ano | findstr :5000` and free the port.
+
 ## Alternative: Command Line
 
 If you prefer using the command line, you can still run:

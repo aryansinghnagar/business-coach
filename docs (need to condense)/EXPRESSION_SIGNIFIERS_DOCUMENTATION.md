@@ -116,24 +116,32 @@ The Expression Signifier System analyzes facial landmarks to compute **30 distin
 
 ---
 
-### g1_eye_contact: Gaze Direction Quality
+### g1_eye_contact: Sustained Eye Contact
 
-**What it measures**: How directly the person is looking at the camera/speaker
+**What it measures**: How directly the person is looking at the camera/speaker, with rewards for sustained periods
 
 **Calculation**:
-- **Gaze Distance**: Distance from eye center to frame center (normalized by face scale)
-- **Head Orientation Penalty**: 
-  - Yaw deviation: >30° = significant turn
-  - Pitch deviation: >20° = looking up/down
-- **Combined Score**: Gaze quality penalized by head orientation (up to 60% reduction)
+- **Base Score**: Current frame's gaze direction and head orientation
+  - Gaze Distance: Distance from eye center to frame center (normalized by face scale)
+  - Head Orientation Penalty: 
+    - Yaw deviation: >30° = significant turn
+    - Pitch deviation: >20° = looking up/down
+  - Gaze quality penalized by head orientation (up to 60% reduction)
+- **Sustained Period Bonus**: Rewards longer periods of maintained eye contact
+  - 6-15 consecutive frames (>60 score): +5 to +20 bonus
+  - 16-25 consecutive frames: +20 to +30 bonus
+  - 26+ consecutive frames: +30 to +35 bonus (max)
+- **Consistency Bonus**: Rewards high average eye contact over recent frames
+  - Average >70 over last 30 frames: up to +10 bonus
+- **Final Score**: Base score + sustained bonus + consistency bonus (capped at 100)
 
 **Score Interpretation**:
-- **80-100**: Strong eye contact, fully engaged
+- **80-100**: Strong sustained eye contact, fully engaged
 - **60-80**: Good eye contact, attentive
 - **40-60**: Moderate eye contact, may be distracted
 - **0-40**: Poor eye contact, likely multitasking
 
-**Business Context**: Direct eye contact indicates focus and active listening. Averted gaze suggests distraction or disengagement.
+**Business Context**: Direct, sustained eye contact indicates focus and active listening. The metric rewards longer periods of maintained contact, reflecting deeper engagement. Averted gaze suggests distraction or disengagement.
 
 ---
 
@@ -305,24 +313,26 @@ The Expression Signifier System analyzes facial landmarks to compute **30 distin
 
 ### g2_lip_pucker: Thinking Expression
 
-**What it measures**: Lip pucker (lips pursed, thinking/evaluating)
+**What it measures**: Lip pucker (lips pursed, thinking/evaluating expression)
 
 **Calculation**:
-- High MAR (>0.25) with relatively narrow mouth width
-- Normalizes mouth width by face scale
-- **Scoring**:
-  - Very high MAR (>0.35) + narrow mouth: 75
-  - High MAR (>0.30) + narrow: 60-70
-  - Moderate MAR (>0.25): 50-65
-  - Normal: 40
+- Requires BOTH high MAR (vertical opening) AND narrow mouth width (horizontal compression)
+- Normalizes mouth width by face scale for size invariance
+- **Detection Logic**:
+  - Normal mouth (MAR ≤ 0.25, width ≥ 0.18): 5-20 (no pucker)
+  - Slight indicators but not both: 20-30 (ambiguous)
+  - Moderate pucker (MAR > 0.30, width < 0.18): 50-70
+  - Strong pucker (MAR > 0.35, width < 0.15): 70-85
+  - Very strong pucker (MAR > 0.40, width < 0.12): 85-100
 
 **Score Interpretation**:
-- **70-75**: Strong lip pucker, deep thinking
-- **60-70**: Moderate pucker, evaluating
-- **50-60**: Slight pucker, processing
-- **<50**: Normal mouth, not thinking
+- **80-100**: Very strong lip pucker, deep thinking/evaluating
+- **70-80**: Strong pucker, active consideration
+- **50-70**: Moderate pucker, processing information
+- **30-50**: Slight pucker or ambiguous expression
+- **0-30**: Normal mouth, no pucker (not thinking)
 
-**Business Context**: Lip pucker indicates evaluation, consideration, or decision-making. Common when processing complex information.
+**Business Context**: Lip pucker indicates evaluation, consideration, or decision-making. Common when processing complex information or making decisions. The metric requires both vertical opening (high MAR) and horizontal compression (narrow width) to detect actual puckering, avoiding false positives from other mouth movements.
 
 ---
 

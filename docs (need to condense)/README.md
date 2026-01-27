@@ -20,25 +20,20 @@ An AI-powered business coaching assistant with real-time speech recognition, tex
 ```
 business-meeting-copilot/
 ├── app.py                              # Main Flask application entry point
-├── gui_launcher.py                     # GUI launcher for easy start/stop (optional)
-├── config.py                           # Configuration settings (all config centralized here)
-├── routes.py                            # Flask route handlers
-├── engagement_state_detector.py          # Engagement detection system
-├── requirements.txt                     # Python dependencies
-├── index.html                           # Frontend interface
-├── services/                            # Service modules
-│   ├── __init__.py
-│   ├── azure_openai.py                 # Azure OpenAI service integration
-│   └── azure_speech.py                 # Azure Speech Service integration
-├── utils/                               # Utility functions
-│   ├── __init__.py
-│   ├── helpers.py                      # Helper functions
-│   ├── video_source_handler.py         # Video source abstraction
-│   ├── engagement_scorer.py             # Engagement scoring algorithms
-│   └── context_generator.py            # Context generation for AI
-├── ENGAGEMENT_DETECTION_DOCUMENTATION.md # User guide for engagement system
-└── ENGAGEMENT_SYSTEM_README.md          # Technical overview
+├── gui_launcher.py                     # GUI launcher (start/stop server)
+├── config.py                           # Centralized configuration
+├── routes.py                           # Flask route handlers
+├── engagement_state_detector.py       # Engagement detection orchestration
+├── requirements.txt                   # Python dependencies
+├── index.html                         # Frontend interface
+├── static/js/                         # Frontend modules (session, engagement, video source, etc.)
+├── services/                          # Azure OpenAI, Speech, Face API
+├── utils/                             # Face detection, signifiers, video, scoring, context
+├── weights/                           # Optional signifier_weights.json
+└── docs (need to condense)/           # All project documentation
 ```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) for full structure and doc index.
 
 ## Prerequisites
 
@@ -102,39 +97,13 @@ business-meeting-copilot/
 
 ## API Endpoints
 
-### Chat Endpoints
+Full reference: [API-REFERENCE.md](API-REFERENCE.md).
 
-- `POST /chat` - Non-streaming chat completion
-- `POST /chat/stream` - Streaming chat completion with conversation history
-
-### Configuration Endpoints
-
-- `GET /config/all` - Get all configuration (used by frontend)
-- `GET /config/speech` - Get speech service configuration
-- `GET /config/openai` - Get OpenAI configuration
-- `GET /config/cognitive-search` - Get Cognitive Search configuration
-- `GET /config/stt-tts` - Get speech-to-text/text-to-speech configuration
-- `GET /config/avatar` - Get avatar configuration
-- `GET /config/system-prompt` - Get system prompt
-- `GET /config/face-detection` - Get face detection method configuration
-- `GET /config/azure-face-api` - Get Azure Face API configuration
-
-### Speech Service Endpoints
-
-- `GET /speech/token` - Get Azure Speech Service access token for STT and TTS
-
-### Avatar Endpoints
-
-- `GET /avatar/relay-token` - Get WebRTC relay token for avatar audio connection
-
-### Engagement Detection Endpoints
-
-- `POST /engagement/start` - Start engagement detection from video source
-- `POST /engagement/stop` - Stop engagement detection
-- `GET /engagement/state` - Get current engagement state (score, metrics, context)
-- `GET /engagement/context` - Get formatted engagement context for AI coaching
-
-See [ENGAGEMENT_DETECTION_DOCUMENTATION.md](ENGAGEMENT_DETECTION_DOCUMENTATION.md) for user documentation and [AZURE_FACE_API_INTEGRATION.md](AZURE_FACE_API_INTEGRATION.md) for Azure Face API integration details.
+- **Chat**: `POST /chat`, `POST /chat/stream` (streaming with optional engagement context)
+- **Config**: `GET /config/all`, `GET /config/face-detection`, `PUT /config/face-detection`, and other config endpoints
+- **Speech / Avatar**: `GET /speech/token`, `GET /avatar/relay-token`
+- **Engagement**: `POST /engagement/start`, `POST /engagement/stop`, `POST /engagement/upload-video`, `GET /engagement/state`, `GET /engagement/context`, `GET /engagement/debug`
+- **Weights**: `GET /weights/signifiers`, `PUT /weights/signifiers`
 
 ## Engagement Context Integration
 
@@ -266,13 +235,17 @@ When contributing:
 
 ## Documentation
 
-- **[README.md](README.md)** - Main project documentation (this file)
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and design
-- **[ENGAGEMENT_DETECTION_DOCUMENTATION.md](ENGAGEMENT_DETECTION_DOCUMENTATION.md)** - User guide for engagement detection
-- **[ENGAGEMENT_SYSTEM_README.md](ENGAGEMENT_SYSTEM_README.md)** - Technical overview of engagement system
-- **[AZURE_FACE_API_INTEGRATION.md](AZURE_FACE_API_INTEGRATION.md)** - Azure Face API integration guide
-- **[ENGAGEMENT_CONTEXT.md](ENGAGEMENT_CONTEXT.md)** - Engagement context integration guide
-- **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** - Complete documentation index
+See **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** for the full index. Key docs:
+
+- **[README.md](README.md)** - This file (overview, setup, usage)
+- **[QUICK_START.md](QUICK_START.md)** - Minimal steps to run the app
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Project structure and design
+- **[CONFIGURATION.md](CONFIGURATION.md)** - All config options
+- **[API-REFERENCE.md](API-REFERENCE.md)** - All API endpoints
+- **[ENGAGEMENT_DETECTION_DOCUMENTATION.md](ENGAGEMENT_DETECTION_DOCUMENTATION.md)** - User guide for engagement
+- **[EXPRESSION_SIGNIFIERS_DOCUMENTATION.md](EXPRESSION_SIGNIFIERS_DOCUMENTATION.md)** - 30 signifiers reference
+- **[AZURE_FACE_API_INTEGRATION.md](AZURE_FACE_API_INTEGRATION.md)** - Azure Face API setup
+- **[LAUNCHER_README.md](LAUNCHER_README.md)** - GUI launcher and restart options
 
 ## Support
 

@@ -26,24 +26,36 @@ The Engagement State Detection System is a modular, real-time video analysis sys
 - Provides suggestions based on engagement levels
 
 ### 5. Face Detection Backends
-- **MediaPipe Detector** (`utils/mediapipe_detector.py`): Local processing, 468 landmarks
-- **Azure Face API Detector** (`utils/azure_face_detector.py`): Cloud processing, 27 landmarks + emotions
-- **Interface** (`utils/face_detection_interface.py`): Pluggable abstraction layer
+- **MediaPipe Detector** (`utils/mediapipe_detector.py`): Local processing, 468 landmarks (**default**).
+- **Azure Face API Detector** (`utils/azure_face_detector.py`): Cloud processing, 27 landmarks + emotions (optional).
+- **Interface** (`utils/face_detection_interface.py`): Pluggable abstraction layer.
+- **Azure Landmark Mapper** (`utils/azure_landmark_mapper.py`): Expands Azure 27 → MediaPipe-like 468 for signifiers.
+- **Face Detection Preference** (`utils/face_detection_preference.py`): Runtime choice (MediaPipe vs Azure).
+
+### 6. Expression Signifiers & Scoring
+- **Expression Signifier Engine** (`utils/expression_signifiers.py`): 30 expression signifiers (0–100 each), composite score.
+- **Signifier Weights** (`utils/signifier_weights.py`): Loads signifier/group weights from URL or `weights/signifier_weights.json`.
+- **Engagement Scorer** (`utils/engagement_scorer.py`): EngagementMetrics (attention, eye_contact, etc.) used alongside signifiers.
 
 ## File Structure
 
 ```
 business-meeting-copilot/
-├── engagement_state_detector.py      # Main detector module
+├── engagement_state_detector.py       # Main detector orchestration
 ├── utils/
-│   ├── video_source_handler.py       # Video source abstraction
-│   ├── engagement_scorer.py          # Scoring algorithms
-│   ├── context_generator.py          # Context generation
-│   └── __init__.py                    # Package exports
-├── routes.py                          # API endpoints (updated)
-├── index.html                         # Frontend (updated)
-├── requirements.txt                   # Dependencies (updated)
-└── ENGAGEMENT_DETECTION_DOCUMENTATION.md  # User documentation
+│   ├── video_source_handler.py        # Video source abstraction
+│   ├── engagement_scorer.py          # Engagement metrics
+│   ├── context_generator.py           # Context for AI
+│   ├── expression_signifiers.py      # 30 signifiers + composite score
+│   ├── signifier_weights.py          # Weights for signifiers/groups
+│   ├── face_detection_interface.py   # Face detector abstraction
+│   ├── mediapipe_detector.py         # MediaPipe (default)
+│   ├── azure_face_detector.py        # Azure Face API (optional)
+│   ├── azure_landmark_mapper.py      # Azure 27 → 468 expansion
+│   └── face_detection_preference.py   # Runtime method preference
+├── weights/signifier_weights.json    # Optional weights
+├── routes.py                          # API endpoints
+└── index.html / static/js/            # Frontend (session, engagement, video source)
 ```
 
 ## Key Features
