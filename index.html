@@ -9,25 +9,32 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     
     <script>
-        // WebRTC polyfill for RTCPeerConnection.getConfiguration (required for avatar audio)
-        (function() {
+        /**
+         * WebRTC polyfill for RTCPeerConnection.getConfiguration (required for avatar audio).
+         * Applied before and after SDK load to ensure compatibility.
+         */
+        (function applyWebRTCPolyfill() {
             if (typeof RTCPeerConnection === 'undefined') return;
             
-            const OriginalRTC = window.RTCPeerConnection;
             const getConfigImpl = function() {
                 return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
             };
             
-            if (typeof OriginalRTC.prototype.getConfiguration !== 'function') {
-                OriginalRTC.prototype.getConfiguration = getConfigImpl;
-            }
+            const applyPolyfill = function() {
+                if (typeof RTCPeerConnection.prototype.getConfiguration !== 'function') {
+                    RTCPeerConnection.prototype.getConfiguration = getConfigImpl;
+                }
+            };
             
+            // Apply immediately
+            applyPolyfill();
+            
+            // Proxy constructor to apply to new instances
+            const OriginalRTC = window.RTCPeerConnection;
             window.RTCPeerConnection = new Proxy(OriginalRTC, {
                 construct: function(target, args) {
                     const pc = new target(...args);
-                    if (typeof pc.getConfiguration !== 'function') {
-                        pc.getConfiguration = getConfigImpl;
-                    }
+                    applyPolyfill.call(pc);
                     return pc;
                 },
                 get: function(target, prop) {
@@ -38,16 +45,13 @@
     </script>
     <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
     <script>
-        // Re-apply WebRTC polyfill after SDK loads
+        // Re-apply WebRTC polyfill after SDK loads (SDK may override prototype)
         (function() {
             if (typeof RTCPeerConnection === 'undefined') return;
-            
-            const getConfigImpl = function() {
-                return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
-            };
-            
             if (typeof RTCPeerConnection.prototype.getConfiguration !== 'function') {
-                RTCPeerConnection.prototype.getConfiguration = getConfigImpl;
+                RTCPeerConnection.prototype.getConfiguration = function() {
+                    return { iceServers: [], iceTransportPolicy: 'all', bundlePolicy: 'balanced' };
+                };
             }
         })();
     </script>
@@ -64,10 +68,11 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
             background-attachment: fixed;
             color: #fff;
+            margin: 0;
+            padding: 0;
             min-height: 100vh;
-            padding: 24px;
             position: relative;
-            overflow-x: hidden;
+            overflow: hidden;
         }
         
         body::before {
@@ -85,45 +90,107 @@
         }
         
         .main-container {
-            max-width: 1400px;
-            margin: 0 auto;
+            display: flex;
+            height: 100vh;
             position: relative;
             z-index: 1;
+            overflow: hidden;
         }
         
-        h1 {
-            font-size: 2.5rem;
+        /* Sidebar (single-column layout: video feed and all controls in sidebar) */
+        .sidebar {
+            flex: 1;
+            width: 100%;
+            max-width: 480px;
+            min-width: 320px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+        }
+        
+        .sidebar-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(102, 126, 234, 0.15);
+        }
+        
+        .sidebar-header h1 {
+            font-size: 1.5rem;
             font-weight: 700;
-            margin-bottom: 12px;
-            text-align: center;
+            margin: 0;
             background: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            letter-spacing: -0.02em;
-            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            letter-spacing: -0.01em;
         }
         
-        .status-indicator {
-            padding: 16px 24px;
-            background: rgba(255, 255, 255, 0.1);
+        .sidebar-header .status-indicator {
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.08);
             backdrop-filter: blur(10px);
-            border-radius: 16px;
-            margin-bottom: 24px;
-            text-align: center;
-            font-size: 0.95rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-weight: 400;
+        }
+        
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .sidebar-content::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .sidebar-content::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .sidebar-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+        }
+        
+        .sidebar-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .sidebar-section {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .sidebar-section-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             color: rgba(255, 255, 255, 0.9);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-            font-weight: 500;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
         
         .button-group {
             display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 32px;
-            justify-content: center;
+            flex-direction: column;
+            gap: 8px;
         }
         
         button {
@@ -195,31 +262,69 @@
             box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
         }
         
-        .chat-container {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(20px);
-            border-radius: 24px;
-            padding: 32px;
-            box-shadow: 
-                0 8px 32px rgba(0, 0, 0, 0.2),
-                0 0 0 1px rgba(255, 255, 255, 0.1);
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 32px;
-            align-items: start;
+        /* Video feed inside sidebar */
+        .sidebar-section.video-feed-section {
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .sidebar-video-wrap {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16/9;
+            max-height: 280px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 12px;
+            overflow: hidden;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         }
         
-        .video-section {
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
+        .sidebar-video-wrap .engagement-feed-wrap {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
         }
         
-        .video-container {
-            display: flex;
-            gap: 16px;
-            align-items: flex-start;
+        .sidebar-video-wrap .engagement-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .sidebar-video-wrap .avatar-pip {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 28%;
+            min-width: 80px;
+            max-width: 120px;
+            aspect-ratio: 16/9;
+            z-index: 5;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        
+        .sidebar-video-wrap .avatar-pip video,
+        .sidebar-video-wrap .avatar-pip audio {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .sidebar-video-wrap #subtitles {
+            position: absolute;
+            bottom: 6%;
+            left: 4%;
+            right: 4%;
+            width: auto;
+            font-size: 0.75rem;
+            padding: 8px 12px;
+            z-index: 999;
         }
         
         .engagement-bar-container {
@@ -227,31 +332,29 @@
             flex-direction: column;
             align-items: center;
             gap: 8px;
-            min-width: 60px;
-            padding: 16px 8px;
+            padding: 12px;
             background: rgba(15, 23, 42, 0.6);
             backdrop-filter: blur(10px);
-            border-radius: 16px;
+            border-radius: 12px;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            min-height: 200px;
         }
         
         .engagement-bar-label {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             font-weight: 600;
             color: rgba(255, 255, 255, 0.8);
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
             margin-bottom: 8px;
         }
         
         .engagement-bar-wrapper {
             position: relative;
-            width: 24px;
-            height: 400px;
+            width: 32px;
+            height: 180px;
             background: rgba(0, 0, 0, 0.3);
-            border-radius: 12px;
+            border-radius: 16px;
             overflow: hidden;
             border: 2px solid rgba(255, 255, 255, 0.1);
         }
@@ -298,54 +401,94 @@
             justify-content: center;
         }
 
-        /* 30 Signifier Metrics Panel (beneath avatar chat) */
-        .engagement-signifiers-panel {
-            margin-top: 24px;
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(20px);
-            border-radius: 20px;
-            padding: 20px 24px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        /* 30 Signifier Metrics Panel (in sidebar) */
+        .sidebar-section.engagement-signifiers-panel {
+            flex: 0 1 auto;
+            min-height: 200px;
+            max-height: 420px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 0;
         }
-        .signifier-panel-inner { max-width: 100%; }
+        .sidebar-section.engagement-signifiers-panel .sidebar-section-title {
+            padding: 16px 16px 8px 16px;
+            margin: 0;
+        }
+        #signifierPanelContainer,
+        #azureMetricsPanelContainer {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .signifier-panel-inner {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+            padding: 0 16px 16px 16px;
+        }
         .signifier-panel-header {
-            font-size: 1rem;
+            font-size: 0.8rem;
             font-weight: 700;
             color: rgba(255, 255, 255, 0.95);
-            margin-bottom: 16px;
+            margin-bottom: 12px;
             letter-spacing: 0.02em;
+            display: none; /* Hide for MediaPipe panel (sidebar-section-title used) */
+        }
+        .azure-metrics-panel-inner .signifier-panel-header {
+            display: block; /* Show for Azure panel so title is visible */
         }
         .signifier-panel-groups {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .signifier-panel-groups::-webkit-scrollbar {
+            width: 6px;
+        }
+        .signifier-panel-groups::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .signifier-panel-groups::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
         }
         .signifier-group {
-            background: rgba(15, 23, 42, 0.5);
-            border-radius: 12px;
-            padding: 12px 16px;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 8px;
+            padding: 10px 12px;
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
         .signifier-group-title {
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: rgba(255, 255, 255, 0.85);
-            margin-bottom: 10px;
+            margin-bottom: 8px;
             padding-bottom: 6px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.15);
         }
-        .signifier-list { display: flex; flex-direction: column; gap: 6px; }
+        .signifier-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
         .signifier-row {
             display: flex;
             align-items: center;
-            gap: 10px;
-            font-size: 0.8rem;
+            gap: 8px;
+            font-size: 0.75rem;
         }
         .signifier-label {
-            flex: 0 0 140px;
+            flex: 0 0 120px;
             color: rgba(255, 255, 255, 0.9);
             white-space: nowrap;
             overflow: hidden;
@@ -353,8 +496,8 @@
         }
         .signifier-bar {
             flex: 1;
-            min-width: 60px;
-            height: 6px;
+            min-width: 40px;
+            height: 5px;
             background: rgba(0, 0, 0, 0.3);
             border-radius: 3px;
             overflow: hidden;
@@ -363,14 +506,15 @@
             height: 100%;
             width: 0%;
             border-radius: 3px;
-            transition: width 0.25s ease, background 0.2s ease;
+            transition: width 0.35s ease-out, background 0.25s ease;
         }
         .signifier-value {
-            flex: 0 0 28px;
+            flex: 0 0 32px;
             text-align: right;
             font-weight: 600;
             color: rgba(255, 255, 255, 0.95);
             font-variant-numeric: tabular-nums;
+            font-size: 0.7rem;
         }
         
         /* Video Source Selector Modal Styles */
@@ -650,25 +794,20 @@
             box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
         }
         
-        #remoteVideo {
-            flex: 1;
+        /* Video container: in sidebar it uses aspect-ratio and max-height */
+        #remoteVideo.sidebar-video-wrap {
             width: 100%;
+            height: auto;
+            max-height: 280px;
             aspect-ratio: 16/9;
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            border-radius: 20px;
-            overflow: hidden;
-            position: relative;
-            box-shadow: 
-                0 8px 32px rgba(0, 0, 0, 0.3),
-                inset 0 0 0 1px rgba(255, 255, 255, 0.1);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
         }
         
         #remoteVideo:hover {
-            transform: translateY(-2px);
-            box-shadow: 
-                0 12px 40px rgba(0, 0, 0, 0.4),
-                inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+            transform: none;
+        }
+        
+        #remoteVideo.sidebar-video-wrap:hover {
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
         }
         
         .engagement-feed-wrap {
@@ -738,45 +877,43 @@
             transition: opacity 0.3s ease;
         }
         
+        /* Chat section in sidebar */
         .chat-transcription-section {
             display: flex;
             flex-direction: column;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 20px;
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
         
         .chat-transcription-header {
             background: rgba(255, 255, 255, 0.08);
             backdrop-filter: blur(10px);
-            padding: 16px 20px;
+            padding: 12px 16px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             color: rgba(255, 255, 255, 0.95);
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.85rem;
             letter-spacing: 0.01em;
+            text-transform: uppercase;
         }
         
         #chatHistory {
+            flex: 1;
             border: none;
             border-radius: 0;
             resize: none;
-            background-color: rgba(15, 23, 42, 0.4);
+            background-color: rgba(15, 23, 42, 0.3);
             backdrop-filter: blur(10px);
             overflow-y: auto;
             overflow-x: hidden;
             color: rgba(255, 255, 255, 0.95);
-            padding: 24px;
-            font-size: 0.95rem;
-            line-height: 1.7;
-            width: 100%;
-            min-height: 400px;
-            max-height: calc(100vh - 400px);
+            padding: 16px;
+            font-size: 0.85rem;
+            line-height: 1.6;
             font-family: 'Inter', sans-serif;
             transition: background-color 0.3s ease;
+            min-height: 150px;
         }
         
         #chatHistory:focus {
@@ -811,20 +948,21 @@
         }
         
         .message-input-container {
-            margin-top: 24px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
         
         .message-input-wrapper {
             display: flex;
-            gap: 12px;
+            gap: 8px;
             align-items: center;
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            border-radius: 16px;
+            border-radius: 10px;
             padding: 6px;
             border: 1px solid rgba(255, 255, 255, 0.2);
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
         
         .message-input-wrapper:focus-within {
@@ -927,118 +1065,151 @@
             border-radius: 4px;
         }
         
+        /* Panel mode: app embedded in extension side panel on any webpage */
+        body.panel-mode .main-container {
+            width: 100%;
+            max-width: none;
+        }
+        body.panel-mode .sidebar {
+            max-width: none;
+            width: 100%;
+            border-right: none;
+            box-shadow: none;
+        }
+        body.panel-mode .sidebar-header {
+            padding: 12px 16px;
+        }
+        body.panel-mode .sidebar-content {
+            padding: 12px 16px;
+        }
+        .integration-badge {
+            display: none;
+            margin-top: 8px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid rgba(34, 197, 94, 0.4);
+            color: rgba(255, 255, 255, 0.95);
+        }
+        body.panel-mode .integration-badge.visible {
+            display: block;
+        }
+        
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 360px;
+                min-width: 320px;
+            }
+        }
+        
         @media (max-width: 768px) {
-            body {
-                padding: 16px;
-            }
-            
-            h1 {
-                font-size: 2rem;
-                margin-bottom: 16px;
-            }
-            
-            .status-indicator {
-                padding: 14px 20px;
-                font-size: 0.9rem;
-            }
-            
-            .chat-container {
-                padding: 20px;
-                grid-template-columns: 1fr;
-                gap: 24px;
-                border-radius: 20px;
-            }
-            
-            .button-group {
+            .main-container {
                 flex-direction: column;
-                gap: 10px;
+            }
+            
+            .sidebar {
+                width: 100%;
+                height: 50vh;
+                min-width: auto;
+                border-right: none;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
+            
+            .main-content {
+                height: 50vh;
+            }
+            
+            .sidebar-header h1 {
+                font-size: 1.25rem;
+            }
+            
+            .sidebar-section {
+                padding: 12px;
             }
             
             button {
-                width: 100%;
-                padding: 14px 24px;
-            }
-            
-            .message-input-wrapper {
-                flex-direction: column;
-                gap: 10px;
-                padding: 8px;
-            }
-            
-            #sendMessageBtn {
-                width: 100%;
-                justify-content: center;
-            }
-            
-            #chatHistory {
-                max-height: 300px;
-                min-height: 300px;
-                padding: 20px;
-            }
-            
-            #remoteVideo {
-                border-radius: 16px;
-            }
-            
-            .video-container {
-                flex-direction: column;
-            }
-            
-            .engagement-bar-container {
-                flex-direction: row;
-                width: 100%;
-                min-width: auto;
-                padding: 8px 16px;
+                padding: 10px 16px;
+                font-size: 0.9rem;
             }
             
             .engagement-bar-wrapper {
-                width: 100%;
-                height: 24px;
-                max-width: 400px;
+                height: 120px;
+                width: 28px;
             }
             
-            .engagement-bar-label {
-                writing-mode: horizontal-tb;
-                text-orientation: mixed;
-                margin-bottom: 0;
-                margin-right: 8px;
+            .signifier-label {
+                flex: 0 0 100px;
             }
-            
-            .engagement-bar-value {
-                transform: translate(-50%, -50%);
-                transform-origin: center;
-            }
-            
-            .engagement-level-indicator {
-                margin-top: 0;
-                margin-left: 8px;
-            }
-
-            .signifier-label { flex: 0 0 100px; }
-            .signifier-panel-groups { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
+    <script>
+        (function () {
+            if (window.self !== window.top) {
+                document.documentElement.classList.add('panel-mode');
+                document.body.classList.add('panel-mode');
+            }
+            var meetingSites = [
+                { pattern: /meet\.google\.com/i, name: 'Google Meet' },
+                { pattern: /zoom\.us|zoom\.com/i, name: 'Zoom' },
+                { pattern: /teams\.microsoft\.com|teams\.live\.com/i, name: 'Microsoft Teams' },
+                { pattern: /webex\.com|\.webex\./i, name: 'Webex' },
+                { pattern: /whereby\.com/i, name: 'Whereby' },
+                { pattern: /gotomeeting\.com/i, name: 'GoToMeeting' },
+                { pattern: /jitsi\.org|meet\.jit\.si/i, name: 'Jitsi' },
+                { pattern: /discord\.com/i, name: 'Discord' },
+                { pattern: /duo\.google\.com/i, name: 'Google Duo' }
+            ];
+            window.addEventListener('message', function (e) {
+                if (e.data && e.data.type === 'TAB_URL' && typeof e.data.url === 'string') {
+                    var url = e.data.url;
+                    var badge = document.getElementById('integrationBadge');
+                    if (!badge) return;
+                    for (var i = 0; i < meetingSites.length; i++) {
+                        if (meetingSites[i].pattern.test(url)) {
+                            badge.textContent = 'Optimized for ' + meetingSites[i].name;
+                            badge.classList.add('visible');
+                            return;
+                        }
+                    }
+                    badge.textContent = '';
+                    badge.classList.remove('visible');
+                }
+            });
+        })();
+    </script>
     <div class="main-container">
-        <h1>Business Meeting Copilot</h1>
-
-        <div class="status-indicator">
-            <p>AI-powered meeting coach with speech recognition and talking avatar. Click "Initialize Avatar Session" to start, then "Start Microphone" for voice interaction.</p>
-        </div>
-
-        <div class="button-group">
-            <button id="initAvatar" onclick="initializeAvatarSession()">Initialize Avatar Session</button>
-            <button id="selectVideoSource" onclick="promptVideoSourceSelection(true)" class="secondary" style="display: none;">Change Video Source</button>
-            <button id="microphone" onclick="microphone()" disabled>Start Microphone</button>
-            <button id="stopSpeaking" onclick="stopSpeaking()" disabled>Stop Speaking</button>
-            <button id="clearChatHistory" onclick="clearChatHistory()" class="secondary">Clear Chat History</button>
-            <button id="stopSession" onclick="stopSession()" disabled class="danger">Close Avatar Session</button>
-        </div>
-
-        <div class="chat-container">
-            <div class="video-section">
-                <div class="video-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>Business Meeting Copilot</h1>
+                <div class="status-indicator">
+                    <p>AI-powered meeting coach with speech recognition and talking avatar.</p>
+                </div>
+                <div id="integrationBadge" class="integration-badge" aria-live="polite"></div>
+            </div>
+            
+            <div class="sidebar-content">
+                <!-- Controls Section -->
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Controls</div>
+                    <div class="button-group">
+                        <button id="initAvatar" onclick="initializeAvatarSession()">Initialize Avatar Session</button>
+                        <button id="selectVideoSource" onclick="promptVideoSourceSelection(true)" class="secondary" style="display: none;">Change Video Source</button>
+                        <button id="stopPartnerSharing" onclick="stopPartnerSharing()" class="secondary" style="display: none;" title="Stop sharing your screen/tab for Meeting Partner Video">Stop sharing</button>
+                        <button id="microphone" onclick="microphone()" disabled>Start Microphone</button>
+                        <button id="stopSpeaking" onclick="stopSpeaking()" disabled>Stop Speaking</button>
+                        <button id="clearChatHistory" onclick="clearChatHistory()" class="secondary">Clear Chat History</button>
+                        <button id="stopSession" onclick="stopSession()" disabled class="danger">Close Avatar Session</button>
+                    </div>
+                </div>
+                
+                <!-- Engagement Bar Section -->
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Engagement Score</div>
                     <div class="engagement-bar-container">
                         <div class="engagement-bar-label">Engagement</div>
                         <div class="engagement-bar-wrapper">
@@ -1047,7 +1218,12 @@
                         </div>
                         <div class="engagement-level-indicator" id="engagementLevel">--</div>
                     </div>
-                    <div id="remoteVideo" style="position: relative; flex: 1;">
+                </div>
+                
+                <!-- Video Feed Section (confined to sidebar) -->
+                <div class="sidebar-section video-feed-section">
+                    <div class="sidebar-section-title">Video Feed</div>
+                    <div id="remoteVideo" class="sidebar-video-wrap">
                         <div id="engagementFeedWrap" class="engagement-feed-wrap" style="display:none;">
                             <img id="engagementFeed" class="engagement-feed" alt="Engagement video feed" />
                         </div>
@@ -1056,38 +1232,43 @@
                     </div>
                 </div>
                 
-                <div class="message-input-container">
-                    <div class="message-input-wrapper">
-                        <input 
-                            type="text" 
-                            id="userMessageInput" 
-                            placeholder="Type your message here or use microphone..." 
-                            disabled
-                            onkeypress="handleMessageKeyPress(event)"
-                        />
-                        <button id="sendMessageBtn" onclick="sendMessage()" disabled>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="22" y1="2" x2="11" y2="13"></line>
-                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                            </svg>
-                            Send
-                        </button>
+                <!-- Engagement Metrics: MediaPipe (30 signifiers) or Azure Face API (emotions + B2B composites) -->
+                <div class="sidebar-section engagement-signifiers-panel">
+                    <div id="signifierPanelContainer"></div>
+                    <div id="azureMetricsPanelContainer" style="display: none;"></div>
+                </div>
+                
+                <!-- Chat Section -->
+                <div class="sidebar-section chat-transcription-section">
+                    <div class="chat-transcription-header">Chat Conversation</div>
+                    <div id="chatHistory" contentEditable="true"></div>
+                    <div class="message-input-container">
+                        <div class="message-input-wrapper">
+                            <input 
+                                type="text" 
+                                id="userMessageInput" 
+                                placeholder="Type your message here or use microphone..." 
+                                disabled
+                                onkeypress="handleMessageKeyPress(event)"
+                            />
+                            <button id="sendMessageBtn" onclick="sendMessage()" disabled>
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                                Send
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
-            
-            <div class="chat-transcription-section">
-                <div class="chat-transcription-header">Chat Conversation</div>
-                <div id="chatHistory" contentEditable="true"></div>
-            </div>
         </div>
-
-        <div id="signifierPanelContainer" class="engagement-signifiers-panel"></div>
     </div>
 
     <!-- Modular JavaScript Modules -->
     <script src="/static/js/engagement-bar.js"></script>
     <script src="/static/js/signifier-panel.js"></script>
+    <script src="/static/js/azure-metrics-panel.js"></script>
     <script src="/static/js/engagement-detector.js"></script>
     <script src="/static/js/session-manager.js"></script>
     <script src="/static/js/avatar-chat-manager.js"></script>
@@ -1109,6 +1290,7 @@
         var engagementBarDisplay = null
         var engagementDetector = null
         var signifierPanel = null
+        var azureMetricsPanel = null
         var videoSourceSelector = null
         
         // UI State
@@ -1150,34 +1332,41 @@
          */
         function initializeSystems() {
             try {
+                var apiBase = 'http://localhost:5000';
                 // Initialize engagement bar display
                 engagementBarDisplay = new EngagementBarDisplay({
                     updateInterval: 500
                 });
 
-                // Initialize 30-metrics signifier panel (beneath avatar chat)
+                // Initialize 30-metrics signifier panel (MediaPipe)
                 signifierPanel = new SignifierPanel({ containerId: 'signifierPanelContainer' });
                 signifierPanel.init();
+                // Initialize Azure Face API metrics panel (emotions + B2B composites; shown only when Azure)
+                azureMetricsPanel = new AzureMetricsPanel({ containerId: 'azureMetricsPanelContainer' });
+                azureMetricsPanel.init();
                 
                 // Initialize engagement detector
                 engagementDetector = new EngagementDetector({
                     barDisplay: engagementBarDisplay,
                     signifierPanel: signifierPanel,
-                    apiBaseUrl: 'http://localhost:5000',
-                    pollInterval: 500,
-                    onAlert: handleEngagementAlert
+                    azureMetricsPanel: azureMetricsPanel,
+                    apiBaseUrl: apiBase,
+                    pollInterval: 200,
+                    onAlert: handleEngagementAlert,
+                    onPartnerStreamStateChange: updateStopPartnerSharingButton
                 });
                 
                 // Initialize session manager
                 sessionManager = new SessionManager({
                     engagementDetector: engagementDetector,
-                    apiBaseUrl: 'http://localhost:5000'
+                    apiBaseUrl: apiBase
                 });
                 
-                // Initialize video source selector
+                // Initialize video source selector (same API base so Azure Face API availability check works)
                 videoSourceSelector = new VideoSourceSelector({
                     onSelect: handleVideoSourceSelected,
-                    onCancel: handleVideoSourceCanceled
+                    onCancel: handleVideoSourceCanceled,
+                    apiBaseUrl: apiBase
                 });
                 
                 // Show "Change Video Source" button after initialization
@@ -1200,11 +1389,14 @@
         
         /**
          * Show the engagement detection video feed in the main display area.
+         * Uses multipart/x-mixed-replace streaming for efficient frame updates (~30 FPS).
+         * The backend streams JPEG frames continuously until the feed is hidden.
          */
         function showEngagementFeed() {
             var el = document.getElementById('engagementFeed');
             if (el) {
                 var base = (sessionManager && sessionManager.apiBaseUrl) ? sessionManager.apiBaseUrl : apiBaseUrl;
+                // Set src to streaming endpoint - browser handles multipart/x-mixed-replace automatically
                 el.src = base + '/engagement/video-feed';
                 el.style.display = 'block';
             }
@@ -1214,10 +1406,14 @@
         
         /**
          * Hide the engagement feed and stop requesting frames.
+         * Setting src to empty string stops the browser from requesting more frames.
          */
         function hideEngagementFeed() {
             var el = document.getElementById('engagementFeed');
-            if (el) { el.src = ''; el.style.display = 'none'; }
+            if (el) {
+                el.src = ''; // Stop streaming
+                el.style.display = 'none';
+            }
             var wrap = document.getElementById('engagementFeedWrap');
             if (wrap) wrap.style.display = 'none';
         }
@@ -1292,20 +1488,61 @@
                     }
                 }
                 
-                // Start session with selected source and detection method
-                // Note: This starts engagement detection, but avatar session is separate
                 // Default to 'mediapipe' if not specified
                 const selectedDetectionMethod = detectionMethod || 'mediapipe';
+                
+                // Partner: getDisplayMedia must run under the same user gesture as the click.
+                // Call it first (before any await), then start session and frame stream on success.
+                if (sourceType === 'partner' && sessionManager && engagementDetector) {
+                    let stream;
+                    try {
+                        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+                    } catch (shareErr) {
+                        if (shareErr.name === 'NotAllowedError') {
+                            console.log('Share canceled by user');
+                            return;
+                        }
+                        console.error('Partner capture failed:', shareErr);
+                        if (shareErr.name === 'NotSupportedError' || (shareErr.message && shareErr.message.indexOf('secure') !== -1)) {
+                            alert('Screen share requires a secure context (localhost or HTTPS). Open the app in a secure page and try again.');
+                        } else {
+                            alert('Screen share failed: ' + (shareErr.message || shareErr.name || 'Unknown error'));
+                        }
+                        return;
+                    }
+                    await sessionManager.startSession('partner', null, selectedDetectionMethod);
+                    showEngagementFeed();
+                    engagementDetector.startPartnerFrameStream(stream);
+                    console.log('Engagement detection started with Meeting Partner Video');
+                    return;
+                }
                 
                 if (sessionManager) {
                     await sessionManager.startSession(sourceType, finalSourcePath, selectedDetectionMethod);
                     showEngagementFeed();
                     console.log(`Engagement detection started with source: ${sourceType}, method: ${selectedDetectionMethod}`);
-                    console.log('✓ Video source selected and engagement detection started');
                 }
             } catch (error) {
                 console.error('Error starting engagement detection with selected source:', error);
                 alert(`Failed to start engagement detection: ${error.message}\n\nPlease try again or select a different source.`);
+            }
+        }
+        
+        /**
+         * Show or hide the "Stop sharing" button based on partner stream state.
+         * @param {boolean} isActive - Whether Meeting Partner Video capture is active
+         */
+        function updateStopPartnerSharingButton(isActive) {
+            var btn = document.getElementById('stopPartnerSharing');
+            if (btn) btn.style.display = isActive ? 'inline-block' : 'none';
+        }
+        
+        /**
+         * Stop sharing screen/tab for Meeting Partner Video (stops getDisplayMedia and frame sending).
+         */
+        function stopPartnerSharing() {
+            if (engagementDetector && engagementDetector.isPartnerStreamActive()) {
+                engagementDetector.stopPartnerFrameStream();
             }
         }
         

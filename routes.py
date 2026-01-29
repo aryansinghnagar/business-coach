@@ -11,6 +11,7 @@ from services.azure_speech import speech_service
 from utils.helpers import build_config_response
 from utils.face_detection_preference import get_face_detection_method, set_face_detection_method
 from engagement_state_detector import EngagementStateDetector, EngagementLevel, VideoSourceType
+from utils.video_source_handler import set_partner_frame_from_bytes
 from utils.context_generator import ContextGenerator
 from utils import signifier_weights
 from typing import Optional
@@ -460,8 +461,8 @@ def start_engagement_detection():
     
     Request Body:
         {
-            "sourceType": "webcam" | "file" | "stream",
-            "sourcePath": "optional path for file/stream sources",
+            "sourceType": "webcam" | "file" | "stream" | "partner",
+            "sourcePath": "optional path for file/stream sources (not used for partner)",
             "detectionMethod": "mediapipe" | "azure_face_api" (optional, uses config default)
         }
     
@@ -487,14 +488,19 @@ def start_engagement_detection():
     source_type_map = {
         "webcam": VideoSourceType.WEBCAM,
         "file": VideoSourceType.FILE,
-        "stream": VideoSourceType.STREAM
+        "stream": VideoSourceType.STREAM,
+        "partner": VideoSourceType.PARTNER
     }
     
     source_type = source_type_map.get(source_type_str)
     if not source_type:
         return jsonify({
-            "error": f"Invalid sourceType: {source_type_str}. Must be 'webcam', 'file', or 'stream'"
+            "error": f"Invalid sourceType: {source_type_str}. Must be 'webcam', 'file', 'stream', or 'partner'"
         }), 400
+    
+    # Partner source does not use sourcePath; frames are pushed via POST /engagement/partner-frame
+    if source_type == VideoSourceType.PARTNER:
+        source_path = None
     
     try:
         if engagement_detector:
@@ -571,6 +577,31 @@ def upload_video_file():
             "error": "Failed to upload video file",
             "details": str(e)
         }), 500
+
+
+@api.route("/engagement/partner-frame", methods=["POST"])
+def partner_frame():
+    """
+    Receive a single frame from the browser (Meeting Partner Video source).
+    Expects raw JPEG body or multipart/form-data with an image file.
+    Used when sourceType is 'partner': frontend captures from getDisplayMedia
+    and POSTs frames here; the engagement detector reads them via get_partner_frame().
+    """
+    try:
+        data = request.get_data()
+        if not data:
+            # Try form file (e.g. multipart with "frame" or "image")
+            if request.files:
+                f = request.files.get("frame") or request.files.get("image") or next(iter(request.files.values()), None)
+                if f:
+                    data = f.read()
+        if not data:
+            return jsonify({"error": "No image data"}), 400
+        if not set_partner_frame_from_bytes(data):
+            return jsonify({"error": "Invalid or unsupported image"}), 400
+        return "", 204
+    except Exception as e:
+        return jsonify({"error": "Failed to process frame", "details": str(e)}), 500
 
 
 @api.route("/engagement/video-feed", methods=["GET"])
@@ -771,7 +802,9 @@ def get_engagement_state():
             "metrics": metrics_dict,
             "context": context_dict,
             "fps": float(engagement_detector.get_fps()),
-            "signifierScores": state.signifier_scores if state.signifier_scores else None
+            "signifierScores": state.signifier_scores if state.signifier_scores else None,
+            "detectionMethod": state.detection_method if state.detection_method else "mediapipe",
+            "azureMetrics": state.azure_metrics if state.azure_metrics else None,
         }
         
         # Include engagement alert if present (drop / plateau); consumed on first return

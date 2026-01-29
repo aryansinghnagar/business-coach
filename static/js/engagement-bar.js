@@ -35,7 +35,11 @@ class EngagementBarDisplay {
         this.currentScore = 0;
         this.currentLevel = 'UNKNOWN';
         this.currentFaceDetected = false;
-        
+        /** Smoothed score (EMA) for fluid bar animation. */
+        this.smoothedScore = null;
+        /** EMA alpha: higher = more responsive, lower = smoother. */
+        this.smoothAlpha = options.smoothAlpha != null ? options.smoothAlpha : 0.35;
+
         // Initialize DOM elements
         this.initializeElements();
     }
@@ -68,6 +72,14 @@ class EngagementBarDisplay {
         this.currentScore = validScore;
         this.currentLevel = validLevel;
         this.currentFaceDetected = validFaceDetected;
+        // Smooth score for fluid bar movement (EMA)
+        if (validFaceDetected) {
+            this.smoothedScore = this.smoothedScore != null
+                ? this.smoothAlpha * validScore + (1 - this.smoothAlpha) * this.smoothedScore
+                : validScore;
+        } else {
+            this.smoothedScore = null;
+        }
         
         this.render();
     }
@@ -80,17 +92,21 @@ class EngagementBarDisplay {
             return;
         }
         
-        // Update bar height (0-100%)
-        const heightPercent = Math.max(0, Math.min(100, this.currentScore));
+        // Use smoothed score for display when face detected, else 0
+        const displayScore = this.currentFaceDetected && this.smoothedScore != null
+            ? this.smoothedScore
+            : this.currentScore;
+        const heightPercent = Math.max(0, Math.min(100, displayScore));
         this.barFill.style.height = heightPercent + '%';
         
-        // Update bar color based on score
-        const color = this.getColorForScore(this.currentScore);
+        // Update bar color based on displayed score
+        const color = this.getColorForScore(displayScore);
         this.barFill.style.background = color;
         
-        // Update value display
+        // Update value display (show smoothed score when face detected)
         if (this.currentFaceDetected) {
-            this.barValue.textContent = Math.round(this.currentScore);
+            const val = (this.smoothedScore != null ? this.smoothedScore : this.currentScore);
+            this.barValue.textContent = Math.round(val);
         } else {
             this.barValue.textContent = '--';
         }
@@ -173,7 +189,7 @@ class EngagementBarDisplay {
         this.currentScore = 0;
         this.currentLevel = 'UNKNOWN';
         this.currentFaceDetected = false;
-        
+        this.smoothedScore = null;
         this.render();
     }
     

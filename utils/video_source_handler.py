@@ -5,6 +5,7 @@ This module provides a unified interface for handling different video sources:
 - Webcam (default camera)
 - Local video files
 - Video streams (WebRTC, RTSP, HTTP streams, etc.)
+- Partner (browser-fed: frames sent from the frontend via getDisplayMedia)
 
 It abstracts away the differences between source types and provides a consistent
 API for reading frames from any supported source.
@@ -14,6 +15,57 @@ import cv2
 from enum import Enum
 from typing import Optional, Tuple
 import numpy as np
+import threading
+
+# Shared state for partner (browser) source: latest frame from frontend
+_partner_frame: Optional[np.ndarray] = None
+_partner_frame_lock = threading.Lock()
+
+
+def set_partner_frame(frame_bgr: Optional[np.ndarray]) -> None:
+    """Set the latest frame received from the browser (partner source)."""
+    global _partner_frame
+    with _partner_frame_lock:
+        _partner_frame = frame_bgr.copy() if frame_bgr is not None else None
+
+
+def get_partner_frame() -> Optional[np.ndarray]:
+    """Get a copy of the latest partner frame (does not clear). Returns None if none available."""
+    with _partner_frame_lock:
+        out = _partner_frame
+        return out.copy() if out is not None else None
+
+
+def has_partner_frame() -> bool:
+    """Return True if a partner frame is available."""
+    with _partner_frame_lock:
+        return _partner_frame is not None
+
+
+# Max width for partner frames (resize larger frames to reduce memory and detection latency)
+PARTNER_FRAME_MAX_WIDTH = 1280
+
+
+def set_partner_frame_from_bytes(image_bytes: bytes) -> bool:
+    """
+    Decode image bytes (e.g. JPEG) to BGR and set as latest partner frame.
+    Frames wider than PARTNER_FRAME_MAX_WIDTH are resized to reduce memory and processing time.
+    Returns True if decoding and set succeeded, False otherwise.
+    """
+    if not image_bytes:
+        return False
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        return False
+    h, w = frame.shape[:2]
+    if w > PARTNER_FRAME_MAX_WIDTH:
+        scale = PARTNER_FRAME_MAX_WIDTH / w
+        new_w = PARTNER_FRAME_MAX_WIDTH
+        new_h = int(round(h * scale))
+        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    set_partner_frame(frame)
+    return True
 
 
 class VideoSourceType(Enum):
@@ -21,6 +73,7 @@ class VideoSourceType(Enum):
     WEBCAM = "webcam"
     FILE = "file"
     STREAM = "stream"
+    PARTNER = "partner"
 
 
 class VideoSourceHandler:
@@ -95,16 +148,19 @@ class VideoSourceHandler:
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     self.cap.set(cv2.CAP_PROP_FPS, 30)
                 else:
-                    # For streams, use a longer timeout
                     self.cap = cv2.VideoCapture(source_path)
-                    # Set buffer size to reduce latency
                     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            
+            elif source_type == VideoSourceType.PARTNER:
+                # Partner source: frames pushed from browser (getDisplayMedia).
+                self.cap = None
+                return True
             
             else:
                 raise ValueError(f"Unsupported source type: {source_type}")
             
-            # Verify that the source opened successfully
-            if not self.cap.isOpened():
+            # Verify that the source opened successfully (not for PARTNER)
+            if self.cap is not None and not self.cap.isOpened():
                 return False
             
             return True
@@ -123,14 +179,16 @@ class VideoSourceHandler:
             - success: True if frame was read successfully, False otherwise
             - frame: BGR image array if successful, None otherwise
         """
+        if self.source_type == VideoSourceType.PARTNER:
+            frame = get_partner_frame()
+            return (True, frame) if frame is not None else (False, None)
+        
         if not self.cap or not self.cap.isOpened():
             return False, None
         
         ret, frame = self.cap.read()
-        
         if not ret or frame is None:
             return False, None
-        
         return True, frame
     
     def get_properties(self) -> dict:
@@ -142,11 +200,12 @@ class VideoSourceHandler:
             - width: Frame width in pixels
             - height: Frame height in pixels
             - fps: Frames per second
-            - frame_count: Total frames (for files) or -1 (for streams/webcam)
+            - frame_count: Total frames (for files) or -1 (for streams/webcam/partner)
         """
+        if self.source_type == VideoSourceType.PARTNER:
+            return {'width': 0, 'height': 0, 'fps': 30, 'frame_count': -1}
         if not self.cap or not self.cap.isOpened():
             return {}
-        
         return {
             'width': int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
             'height': int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
@@ -177,7 +236,8 @@ class VideoSourceHandler:
         if self.cap:
             self.cap.release()
             self.cap = None
-        
+        if self.source_type == VideoSourceType.PARTNER:
+            set_partner_frame(None)
         self.source_type = None
         self.source_path = None
     

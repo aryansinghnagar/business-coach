@@ -1,0 +1,63 @@
+.popup {
+  width: 280px;
+  padding: 16px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+h1 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: #1a1a2e;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin: 0 0 14px 0;
+  line-height: 1.35;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.btn-secondary {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.btn-secondary:hover {
+  background: #e2e8f0;
+}
+
+.status {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin: 12px 0 0 0;
+  min-height: 1.2em;
+}
+
+.status.error { color: #dc2626; }
+.status.ok { color: #16a34a; }

@@ -12,10 +12,12 @@ class VideoSourceSelector {
      * @param {Object} options - Configuration options
      * @param {Function} options.onSelect - Callback when source is selected
      * @param {Function} options.onCancel - Callback when selection is canceled
+     * @param {string} [options.apiBaseUrl='http://localhost:5000'] - Backend API base URL. Used to fetch face-detection config; if wrong or unreachable, Azure Face API option will be greyed out.
      */
     constructor(options = {}) {
         this.onSelect = options.onSelect || null;
         this.onCancel = options.onCancel || null;
+        this.apiBaseUrl = options.apiBaseUrl || 'http://localhost:5000';
         this.modal = null;
         this.fileInput = null;
         this.azureAvailable = false;
@@ -32,10 +34,13 @@ class VideoSourceSelector {
      */
     async checkAzureAvailability() {
         try {
-            const response = await fetch('http://localhost:5000/config/face-detection');
+            const url = `${this.apiBaseUrl.replace(/\/$/, '')}/config/face-detection`;
+            const response = await fetch(url);
             if (response.ok) {
                 const config = await response.json();
                 this.azureAvailable = config.azureFaceApiAvailable || false;
+            } else {
+                this.azureAvailable = false;
             }
         } catch (error) {
             console.warn('Could not check Azure Face API availability:', error);
@@ -67,20 +72,20 @@ class VideoSourceSelector {
                             <p>Use your default webcam for engagement detection</p>
                         </div>
                         <div class="video-source-radio">
-                            <input type="radio" name="videoSource" value="webcam" id="sourceWebcam">
+                            <input type="radio" name="videoSource" value="webcam" id="sourceWebcam" checked>
                             <label for="sourceWebcam"></label>
                         </div>
                     </div>
                     
-                    <div class="video-source-option" data-source="stream">
+                    <div class="video-source-option" data-source="partner">
                         <div class="video-source-icon">🖥️</div>
                         <div class="video-source-info">
                             <h3>Meeting Partner Video</h3>
-                            <p>Use the meeting partner's video stream (from avatar session)</p>
+                            <p>Share screen and select the meeting tab or window (e.g. pin one participant in Meet, Teams, or Zoom) so we analyze their video.</p>
                         </div>
                         <div class="video-source-radio">
-                            <input type="radio" name="videoSource" value="stream" id="sourceStream" checked>
-                            <label for="sourceStream"></label>
+                            <input type="radio" name="videoSource" value="partner" id="sourcePartner">
+                            <label for="sourcePartner"></label>
                         </div>
                     </div>
                     
@@ -224,16 +229,16 @@ class VideoSourceSelector {
         
         if (!this.azureAvailable && azureOption && azureRadio) {
             azureRadio.disabled = true;
-            
-            // Update description
             if (azureDescription) {
                 azureDescription.textContent = 'Azure Face API is not configured. Please set AZURE_FACE_API_KEY and AZURE_FACE_API_ENDPOINT.';
                 azureDescription.style.color = 'rgba(255, 255, 255, 0.5)';
             }
-        } else if (this.azureAvailable && azureDescription) {
-            // Reset to normal description if available
-            azureDescription.textContent = 'Cloud-based, 27 landmarks + emotion detection. Requires Azure configuration.';
-            azureDescription.style.color = 'rgba(255, 255, 255, 0.7)';
+        } else if (this.azureAvailable && azureOption && azureRadio) {
+            azureRadio.disabled = false;
+            if (azureDescription) {
+                azureDescription.textContent = 'Cloud-based, 27 landmarks + emotion detection. Requires Azure configuration.';
+                azureDescription.style.color = 'rgba(255, 255, 255, 0.7)';
+            }
         }
     }
     

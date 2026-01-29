@@ -78,10 +78,10 @@ class ExpressionSignifierEngine:
 
     def __init__(
         self,
-        buffer_frames: int = 45,
+        buffer_frames: int = 22,
         weights_provider: Optional[Callable[[], Dict[str, List[float]]]] = None,
     ):
-        self.buffer_frames = max(15, buffer_frames)
+        self.buffer_frames = max(10, buffer_frames)
         self._buf: deque = deque(maxlen=self.buffer_frames)
         self._weights_provider = weights_provider
         self._landmarks: Optional[np.ndarray] = None
@@ -91,8 +91,8 @@ class ExpressionSignifierEngine:
         self._baseline_eye_area: float = 0.0
         self._baseline_z: float = 0.0
         self._baseline_ear: float = 0.0  # For Duchenne squinch detection
-        self._pupil_dilation_history: deque = deque(maxlen=5)  # Smooth pupil dilation score
-        self._last_pupil_dilation_score: float = 50.0  # Last valid score (for blink frames)
+        self._pupil_dilation_history: deque = deque(maxlen=3)  # Minimal smoothing for real-time
+        self._last_pupil_dilation_score: float = 0.0  # Last valid score (for blink frames); default 0
         self._blink_start_frames: int = 0
         self._blinks_in_window: int = 0
         self._last_blink_reset: float = 0.0
@@ -104,7 +104,7 @@ class ExpressionSignifierEngine:
         self._baseline_z = 0.0
         self._baseline_ear = 0.0
         self._pupil_dilation_history.clear()
-        self._last_pupil_dilation_score = 50.0
+        self._last_pupil_dilation_score = 0.0  # default 0; output scale 0–100
         self._blink_start_frames = 0
         self._blinks_in_window = 0
 
@@ -221,22 +221,22 @@ class ExpressionSignifierEngine:
                 mar_inner = v / h
         is_blink = 1.0 if ear < 0.16 else 0.0
 
-        # Baselines (EMA) - only update when not blinking to avoid contamination
+        # Baselines (EMA) - faster adaptation for real-time sensitivity to small changes
         if is_blink < 0.5:  # Only update baseline when not blinking
             if self._baseline_eye_area <= 0 and eye_area > 0:
                 self._baseline_eye_area = eye_area
             elif eye_area > 0:
-                self._baseline_eye_area = 0.95 * self._baseline_eye_area + 0.05 * eye_area
+                self._baseline_eye_area = 0.88 * self._baseline_eye_area + 0.12 * eye_area
         if self._baseline_z == 0 and face_z != 0:
             self._baseline_z = face_z
         else:
-            self._baseline_z = 0.95 * self._baseline_z + 0.05 * face_z if face_z != 0 else self._baseline_z
+            self._baseline_z = 0.88 * self._baseline_z + 0.12 * face_z if face_z != 0 else self._baseline_z
         # Baseline EAR for Duchenne squinch detection (exclude blinks)
         if is_blink < 0.5:  # Only update baseline when not blinking
             if self._baseline_ear <= 0 and ear > 0:
                 self._baseline_ear = ear
             elif ear > 0:
-                self._baseline_ear = 0.95 * self._baseline_ear + 0.05 * ear
+                self._baseline_ear = 0.88 * self._baseline_ear + 0.12 * ear
 
         t = time.time()
         # Blink counting (reset every 2s)
@@ -268,7 +268,7 @@ class ExpressionSignifierEngine:
         buf = list(self._buf)
         if lm is None or shp is None or len(buf) < 2:
             for k in self._all_keys():
-                out[k] = 50.0
+                out[k] = 0.0
             return out
 
         h, w = shp[0], shp[1]
@@ -294,7 +294,7 @@ class ExpressionSignifierEngine:
         out["g2_lip_pucker"] = self._g2_lip_pucker(lm, cur)
         out["g2_eye_squint"] = self._g2_eye_squint(cur)
         out["g2_thinking_brow"] = self._g2_thinking_brow(lm)
-        out["g2_chin_stroke"] = 50.0  # no hand detection
+        out["g2_chin_stroke"] = 0.0  # no hand detection
         out["g2_stillness"] = self._g2_stillness(buf)
         out["g2_lowered_brow"] = self._g2_lowered_brow(lm)
 
@@ -308,15 +308,18 @@ class ExpressionSignifierEngine:
         out["g3_gaze_aversion"] = self._g3_gaze_aversion(cur)
         out["g3_no_nod"] = self._g3_no_nod(buf)
         out["g3_narrowed_pupils"] = self._g3_narrowed_pupils(cur)  # proxy: squint
-        out["g3_mouth_cover"] = 50.0  # no hand detection
+        out["g3_mouth_cover"] = 0.0  # no hand detection
 
         # --- Group 4: Decision-Ready ---
         out["g4_relaxed_exhale"] = self._g4_relaxed_exhale(buf)
         out["g4_fixed_gaze"] = self._g4_fixed_gaze(buf, w, h)
-        out["g4_smile_transition"] = self._g4_smile_transition(buf, out.get("g1_duchenne", 50))
+        out["g4_smile_transition"] = self._g4_smile_transition(buf, out.get("g1_duchenne", 0))
 
+        # Scale: default/weak = 0, strong = 100 (map old 50 -> 0, 100 -> 100)
         for k in out:
-            out[k] = max(0.0, min(100.0, float(out[k])))
+            v = float(out[k])
+            scaled = (v - 50.0) * 2.0
+            out[k] = max(0.0, min(100.0, scaled))
         return out
 
     def _all_keys(self) -> List[str]:
@@ -354,7 +357,11 @@ class ExpressionSignifierEngine:
                 total_ws += wi
             if total_ws > 1e-9:
                 return total_w / total_ws
-            return float(np.mean([scores[k] for k in grp_keys if k in scores])) if grp_keys else 50.0
+            return float(np.mean([scores[k] for k in grp_keys if k in scores])) if grp_keys else 0.0
+
+        # When all metrics are 0 (e.g. no data), composite = 0
+        if all(float(scores.get(k, 0)) == 0.0 for k in keys):
+            return 0.0
 
         g1k = ["g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
                "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead"]
@@ -371,6 +378,7 @@ class ExpressionSignifierEngine:
         g4 = weighted_mean(g4k)
 
         composite = gw[0] * g1 + gw[1] * g2 + gw[2] * g3 + gw[3] * g4
+        # Composite is 0-100: 0 = no engagement, 100 = high (g3 already inverted so high g3 = low resistance)
         return float(max(0.0, min(100.0, composite)))
 
     # ----- Group 1 -----
@@ -383,38 +391,35 @@ class ExpressionSignifierEngine:
         if len(mouth_pts) < 8:
             return 50.0
         
-        # Calculate smile intensity (gradual, not binary)
+        # Calculate smile intensity (gradual, more sensitive to small corner lift)
         ly = float(mouth_pts[0, 1])
         ry = float(mouth_pts[5, 1]) if mouth_pts.shape[0] > 5 else ly
         mid_y = float(np.mean(mouth_pts[:, 1]))
         corner_lift = (mid_y - (ly + ry) / 2)  # Positive = corners up
-        smile_threshold = face_scale * 0.03  # Minimum for smile
-        smile_intensity = min(1.0, max(0.0, corner_lift / max(face_scale * 0.12, 1e-6)))  # 0-1 scale
+        smile_threshold = face_scale * 0.018  # Lower threshold: detect smaller smiles
+        smile_intensity = min(1.0, max(0.0, corner_lift / max(face_scale * 0.07, 1e-6)))  # Steeper: small lift -> higher intensity
         
-        # Calculate squinch: EAR reduction relative to baseline (more accurate)
+        # Calculate squinch: EAR reduction relative to baseline (wider band for sensitivity)
         baseline_ear = self._baseline_ear if self._baseline_ear > 0 else 0.25
         if baseline_ear <= 0:
             return 50.0
         ear_ratio = ear / baseline_ear
-        # Squinch: EAR 85-95% of baseline (slight narrowing, not full squint)
+        # Squinch: EAR 88-98% of baseline (sensitive to slight narrowing)
         squinch_intensity = 0.0
-        if 0.85 <= ear_ratio <= 0.95:
-            squinch_intensity = 1.0 - abs(ear_ratio - 0.90) / 0.10  # Peak at 0.90
-        elif ear_ratio < 0.85:
+        if 0.88 <= ear_ratio <= 0.98:
+            squinch_intensity = 1.0 - abs(ear_ratio - 0.93) / 0.10  # Peak at 0.93
+        elif ear_ratio < 0.88:
             squinch_intensity = 0.5  # Too much squint, less genuine
         
-        # Combine: Duchenne = smile + squinch
-        if corner_lift > smile_threshold and squinch_intensity > 0.3:
-            # Both present: genuine Duchenne
+        # Combine: Duchenne = smile + squinch (higher gain for small changes)
+        if corner_lift > smile_threshold and squinch_intensity > 0.25:
             combined = 0.6 * smile_intensity + 0.4 * squinch_intensity
-            return 50.0 + combined * 50.0  # 50-100
+            return 50.0 + combined * 52.0  # 50-102 -> clamp 100
         elif corner_lift > smile_threshold:
-            # Smile only: social smile
-            return 50.0 + smile_intensity * 30.0  # 50-80
-        elif squinch_intensity > 0.3:
-            # Squinch only: neutral
-            return 45.0 + squinch_intensity * 10.0  # 45-55
-        return 30.0  # No smile, no squinch
+            return 50.0 + smile_intensity * 38.0  # 50-88
+        elif squinch_intensity > 0.25:
+            return 45.0 + squinch_intensity * 14.0  # 45-59
+        return 28.0 + min(1.0, corner_lift / max(face_scale * 0.04, 1e-6)) * 12.0  # Slight lift still scores 28-40
 
     def _g1_pupil_dilation(self, cur: dict) -> float:
         # Proxy: eye area vs baseline (wider = higher)
@@ -423,40 +428,39 @@ class ExpressionSignifierEngine:
         area = cur.get("eye_area", 0.0)
         base = max(1e-6, self._baseline_eye_area)
         
-        # During blinks, return last valid score (don't use blink data)
+        # During blinks, return last valid score (decay toward 0)
         if is_blink > 0.5:
-            # Use last valid score with slight decay toward neutral
-            smoothed = 0.9 * self._last_pupil_dilation_score + 0.1 * 50.0
+            smoothed = 0.96 * self._last_pupil_dilation_score + 0.04 * 0.0
             self._last_pupil_dilation_score = smoothed
             return float(smoothed)
         
         # Calculate ratio only when not blinking
         r = area / base if base > 0 else 1.0
         
-        # Score calculation: 0-100 range
-        # r < 0.9: eyes narrowed (low dilation) -> 0-40
-        # r 0.9-1.0: normal -> 40-50
-        # r 1.0-1.1: slightly wider -> 50-60
-        # r > 1.1: dilated -> 60-100
-        if r >= 1.1:
-            score = 60.0 + min(40.0, (r - 1.1) * 200.0)  # 60-100 for r 1.1-1.3+
-        elif r >= 1.05:
-            score = 55.0 + (r - 1.05) / 0.05 * 5.0  # 55-60 for r 1.05-1.1
+        # Score: steeper bands so small ratio changes produce larger score changes
+        # r < 0.92: narrowed -> 0-38
+        # r 0.92-0.97: slightly narrow -> 38-46
+        # r 0.97-1.03: normal -> 46-54
+        # r 1.03-1.08: slightly wide -> 54-62
+        # r > 1.08: dilated -> 62-100
+        if r >= 1.08:
+            score = 62.0 + min(38.0, (r - 1.08) * 320.0)
+        elif r >= 1.03:
+            score = 54.0 + (r - 1.03) / 0.05 * 8.0
         elif r >= 1.0:
-            score = 50.0 + (r - 1.0) / 0.05 * 5.0  # 50-55 for r 1.0-1.05
-        elif r >= 0.95:
-            score = 45.0 + (r - 0.95) / 0.05 * 5.0  # 45-50 for r 0.95-1.0
-        elif r >= 0.9:
-            score = 40.0 + (r - 0.9) / 0.05 * 5.0  # 40-45 for r 0.9-0.95
+            score = 50.0 + (r - 1.0) / 0.03 * 4.0
+        elif r >= 0.97:
+            score = 46.0 + (r - 0.97) / 0.03 * 4.0
+        elif r >= 0.92:
+            score = 38.0 + (r - 0.92) / 0.05 * 8.0
         else:
-            score = max(0.0, 40.0 + (r - 0.9) * 400.0)  # 0-40 for r < 0.9
+            score = max(0.0, 38.0 + (r - 0.92) * 380.0)
         
-        # Temporal smoothing: blend with recent history to reduce fluctuation
+        # Minimal smoothing: 92% current, 8% recent (low latency)
         self._pupil_dilation_history.append(score)
-        if len(self._pupil_dilation_history) >= 3:
-            # Weighted average: 70% current, 30% recent average
+        if len(self._pupil_dilation_history) >= 2:
             recent_avg = float(np.mean(list(self._pupil_dilation_history)[:-1]))
-            smoothed_score = 0.7 * score + 0.3 * recent_avg
+            smoothed_score = 0.92 * score + 0.08 * recent_avg
         else:
             smoothed_score = score
         
@@ -466,158 +470,124 @@ class ExpressionSignifierEngine:
         return float(max(0.0, min(100.0, smoothed_score)))
 
     def _g1_eyebrow_flash(self, buf: list) -> float:
-        # Eyebrow flash: rapid raise and return (surprise/acknowledgment)
-        if len(buf) < 15:
+        # Eyebrow flash: rapid raise and return (shorter window, lower threshold for sensitivity)
+        if len(buf) < 8:
             return 50.0
         heights = [(b["eyebrow_l"] + b["eyebrow_r"]) / 2 for b in buf]
         face_scale = buf[-1].get("face_scale", 50.0)
-        threshold = face_scale * 0.04
+        threshold = face_scale * 0.022  # Lower: detect smaller raises
         
-        # Baseline from first half
         baseline = float(np.mean(heights[:max(1, len(heights) // 2)]))
         cur = heights[-1]
-        
-        # Check for recent raise (last 5 frames)
-        recent_heights = heights[-5:]
+        recent_heights = heights[-4:]
         max_recent = float(np.max(recent_heights))
-        min_recent = float(np.min(recent_heights))
         
-        # Flash pattern: raised recently, now returning
         raised = max_recent > baseline + threshold
-        returning = cur < max_recent - threshold * 0.5  # Dropped from peak
+        returning = cur < max_recent - threshold * 0.4
         
         if raised and returning:
-            # Strong flash: rapid raise and return
-            flash_magnitude = (max_recent - baseline) / max(face_scale * 0.15, 1e-6)
-            return 60.0 + min(35.0, flash_magnitude * 100.0)  # 60-95
+            flash_magnitude = (max_recent - baseline) / max(face_scale * 0.10, 1e-6)
+            return 60.0 + min(38.0, flash_magnitude * 120.0)
         elif raised:
-            # Raised but not yet returning
-            raise_magnitude = (cur - baseline) / max(face_scale * 0.15, 1e-6)
-            return 50.0 + min(20.0, raise_magnitude * 50.0)  # 50-70
+            raise_magnitude = (cur - baseline) / max(face_scale * 0.10, 1e-6)
+            return 50.0 + min(28.0, raise_magnitude * 70.0)
+        # Small raise above baseline still scores slightly above 50
+        if cur > baseline + threshold * 0.5:
+            return 50.0 + min(8.0, (cur - baseline) / max(face_scale * 0.08, 1e-6) * 30.0)
         return 50.0
 
     def _g1_eye_contact(self, cur: dict, w: int, h: int, buf: list) -> float:
         """
-        Sustained Eye Contact: Measures gaze direction quality and rewards sustained periods.
-        
-        Calculation:
-        - Base score from current frame's gaze direction and head orientation
-        - Tracks eye contact history over recent frames (last 30 frames ~1 second)
-        - Rewards sustained periods: score increases when good eye contact is maintained
-        - Uses exponential moving average for smooth transitions
+        Sustained Eye Contact: Head orientation toward camera (primary) plus face position (secondary).
+        Rewards sustained periods of facing the camera.
         """
-        # Eye contact: gaze direction + head orientation both toward camera
-        gx, gy = cur.get("gaze_x", 0), cur.get("gaze_y", 0)
+        gx = cur.get("gaze_x", 0)
+        gy = cur.get("gaze_y", 0)
         yaw = cur.get("yaw", 0)
         pitch = cur.get("pitch", 0)
         face_scale = cur.get("face_scale", 50.0)
-        
-        # Gaze distance from center (normalized by face scale)
-        gaze_dist = np.sqrt(gx * gx + gy * gy)
-        gaze_normalized = min(1.0, gaze_dist / max(face_scale * 0.4, 1e-6))  # 40% of inter-ocular = good threshold
-        
-        # Head orientation penalty (yaw and pitch)
-        yaw_penalty = min(1.0, abs(yaw) / 30.0)  # 30° = significant turn
-        pitch_penalty = min(1.0, abs(pitch) / 20.0)  # 20° = looking up/down
-        
-        # Combine: gaze quality (0-100) penalized by head orientation
-        gaze_score = (1.0 - gaze_normalized) * 100.0
-        head_penalty = (yaw_penalty + pitch_penalty) / 2.0
-        base_score = gaze_score * (1.0 - head_penalty * 0.6)  # Head orientation can reduce by up to 60%
-        
-        # Track sustained eye contact over time
+
+        # Primary: head orientation toward camera (yaw/pitch near 0 = looking at camera)
+        # Score 100 when head is forward; decay by angle (wider tolerance so normal movement still scores high)
+        yaw_deg = abs(float(yaw))
+        pitch_deg = abs(float(pitch))
+        # 0° = 100; ~25° yaw or ~20° pitch = 50; 50°+ = 0
+        head_score = 100.0 - min(100.0, (yaw_deg / 25.0) * 50.0 + (pitch_deg / 20.0) * 50.0)
+
+        # Secondary: face position in frame (eye center vs frame center); cap effect so head dominates
+        gaze_dist = np.sqrt(float(gx) * float(gx) + float(gy) * float(gy))
+        gaze_normalized = min(1.0, gaze_dist / max(face_scale * 0.45, 1e-6))  # 45% = neutral; less strict
+        gaze_bonus = (1.0 - gaze_normalized) * 15.0  # Up to +15 when face centered
+
+        base_score = min(100.0, head_score + gaze_bonus)
+
         if len(buf) < 2:
             return float(max(0.0, min(100.0, base_score)))
-        
-        # Look at recent eye contact history (last 30 frames ~1 second at 30fps)
-        recent_frames = buf[-30:] if len(buf) >= 30 else buf
-        
-        # Calculate eye contact quality for each recent frame
-        frame_scores = []
-        for frame in recent_frames:
-            gx_f = frame.get("gaze_x", 0)
-            gy_f = frame.get("gaze_y", 0)
-            yaw_f = frame.get("yaw", 0)
-            pitch_f = frame.get("pitch", 0)
-            face_scale_f = frame.get("face_scale", 50.0)
-            
-            gaze_dist_f = np.sqrt(gx_f * gx_f + gy_f * gy_f)
-            gaze_norm_f = min(1.0, gaze_dist_f / max(face_scale_f * 0.4, 1e-6))
-            yaw_pen_f = min(1.0, abs(yaw_f) / 30.0)
-            pitch_pen_f = min(1.0, abs(pitch_f) / 20.0)
-            gaze_score_f = (1.0 - gaze_norm_f) * 100.0
-            head_pen_f = (yaw_pen_f + pitch_pen_f) / 2.0
-            frame_score = gaze_score_f * (1.0 - head_pen_f * 0.6)
-            frame_scores.append(frame_score)
-        
-        # Count consecutive frames with good eye contact (score > 60) from current frame backwards
+
+        # Same formula for each frame in history (consistent with base_score)
+        def _frame_eye_contact(frame: dict) -> float:
+            gxf = frame.get("gaze_x", 0)
+            gyf = frame.get("gaze_y", 0)
+            yaw_f = abs(float(frame.get("yaw", 0)))
+            pitch_f = abs(float(frame.get("pitch", 0)))
+            fs = max(face_scale, frame.get("face_scale", 50.0), 20.0)
+            head_s = 100.0 - min(100.0, (yaw_f / 25.0) * 50.0 + (pitch_f / 20.0) * 50.0)
+            gd = np.sqrt(float(gxf) * float(gxf) + float(gyf) * float(gyf))
+            gn = min(1.0, gd / max(fs * 0.45, 1e-6))
+            g_bonus = (1.0 - gn) * 15.0
+            return min(100.0, head_s + g_bonus)
+
+        recent_frames = buf[-18:] if len(buf) >= 18 else buf
+        frame_scores = [_frame_eye_contact(f) for f in recent_frames]
+
+        # Count consecutive frames with good eye contact from current backward (lower threshold = more sustained)
+        good_threshold = 50.0
         sustained_period = 0
-        for score in reversed(frame_scores):
-            if score > 60.0:
+        for s in reversed(frame_scores):
+            if s > good_threshold:
                 sustained_period += 1
             else:
-                break  # Break in eye contact, stop counting
-        
-        # Calculate average eye contact quality over recent frames
-        avg_recent_score = np.mean(frame_scores) if frame_scores else base_score
-        
-        # Reward sustained periods: increase score based on duration
-        # The longer eye contact is maintained, the higher the bonus
-        # 0-5 frames: no bonus (base score)
-        # 6-15 frames: +5 to +20 bonus
-        # 16-25 frames: +20 to +30 bonus
-        # 26+ frames: +30 to +35 bonus (max)
-        if sustained_period >= 26:
-            sustained_bonus = 35.0
-        elif sustained_period >= 16:
-            sustained_bonus = 20.0 + (sustained_period - 16) * 1.5  # 20-35
+                break
+
+        avg_recent = float(np.mean(frame_scores)) if frame_scores else base_score
+
+        if sustained_period >= 14:
+            sustained_bonus = 28.0
+        elif sustained_period >= 10:
+            sustained_bonus = 18.0 + (sustained_period - 10) * 2.5
         elif sustained_period >= 6:
-            sustained_bonus = 5.0 + (sustained_period - 6) * 1.5  # 5-20
+            sustained_bonus = 8.0 + (sustained_period - 6) * 2.5
+        elif sustained_period >= 3:
+            sustained_bonus = 2.0 + (sustained_period - 3) * 2.0
         else:
             sustained_bonus = 0.0
-        
-        # Reward consistency: if average recent score is high, add bonus
-        # This rewards sustained good eye contact even if current frame is slightly lower
-        if avg_recent_score > 70.0:
-            consistency_bonus = min(10.0, (avg_recent_score - 70.0) / 30.0 * 10.0)  # Up to +10
-        else:
-            consistency_bonus = 0.0
-        
-        # Combine: base score (current frame) + sustained period bonus + consistency bonus
-        # Add bonuses directly to base score, but cap at 100
+
+        consistency_bonus = min(8.0, max(0.0, (avg_recent - 55.0) / 45.0 * 8.0)) if avg_recent > 55.0 else 0.0
+
         final_score = base_score + sustained_bonus + consistency_bonus
-        
-        # Ensure we don't exceed 100
         return float(max(0.0, min(100.0, final_score)))
 
     def _g1_head_tilt(self, cur: dict) -> float:
-        # Head tilt: slight tilt (5-15°) shows interest, extreme tilt shows disengagement
+        # Head tilt: more sensitive bands; small tilt (3-12°) scores high
         roll = abs(cur.get("roll", 0))
         
-        # Optimal: 5-15° (shows interest, listening)
-        if 5 <= roll <= 15:
-            # Peak engagement at ~10°
-            optimal_dist = abs(roll - 10.0)
-            return 70.0 + (1.0 - optimal_dist / 5.0) * 25.0  # 70-95
-        
-        # Very slight tilt (0-5°): neutral-positive
-        if 0 <= roll < 5:
-            return 55.0 + roll * 3.0  # 55-70
-        
-        # Moderate tilt (15-25°): still engaged but less so
-        if 15 < roll <= 25:
-            return 60.0 - (roll - 15) * 2.0  # 60-40
-        
-        # Extreme tilt (>25°): disengaged
-        return max(10.0, 40.0 - (roll - 25) * 1.5)  # 40-10
+        if 3 <= roll <= 12:
+            optimal_dist = abs(roll - 7.5)
+            return 72.0 + (1.0 - optimal_dist / 5.0) * 26.0  # 72-98
+        if 0 <= roll < 3:
+            return 58.0 + roll * 5.0  # 58-73
+        if 12 < roll <= 22:
+            return 62.0 - (roll - 12) * 2.2  # 62-40
+        return max(10.0, 38.0 - (roll - 22) * 1.6)
 
     def _g1_forward_lean(self, cur: dict) -> float:
         z = cur.get("face_z", 0)
         base = self._baseline_z
         if base == 0 or z == 0:
             return 50.0
-        if z < base * 0.97:
-            return 50.0 + min(50.0, (1.0 - z / base) * 150.0)
+        # More sensitive: smaller lean-in (e.g. 0.98) already boosts score
+        if z < base * 0.99:
+            return 50.0 + min(52.0, (1.0 - z / base) * 220.0)
         return 50.0
 
     def _g1_facial_symmetry(self, lm: np.ndarray, buf: list) -> float:
@@ -728,90 +698,106 @@ class ExpressionSignifierEngine:
         # Poor symmetry (10-15% error) = 30-50
         # Very poor symmetry (> 15% error) = 0-30
         
-        if total_error < 0.03:  # < 3% error: excellent symmetry
-            # Map 0-3% to 100-90
-            symmetry_score = 100.0 - (total_error / 0.03) * 10.0
-        elif total_error < 0.06:  # 3-6% error: good symmetry
-            # Map 3-6% to 90-70
-            symmetry_score = 90.0 - ((total_error - 0.03) / 0.03) * 20.0
-        elif total_error < 0.10:  # 6-10% error: moderate symmetry
-            # Map 6-10% to 70-50
-            symmetry_score = 70.0 - ((total_error - 0.06) / 0.04) * 20.0
-        elif total_error < 0.15:  # 10-15% error: poor symmetry
-            # Map 10-15% to 50-30
-            symmetry_score = 50.0 - ((total_error - 0.10) / 0.05) * 20.0
-        else:  # > 15% error: very poor symmetry
-            # Map 15-30% to 30-0 (cap at 30% error for scoring)
-            capped_error = min(total_error, 0.30)
-            symmetry_score = max(0.0, 30.0 - ((capped_error - 0.15) / 0.15) * 30.0)
+        # Finer bands: small asymmetry changes produce larger score changes
+        if total_error < 0.02:
+            symmetry_score = 100.0 - (total_error / 0.02) * 8.0
+        elif total_error < 0.045:
+            symmetry_score = 92.0 - ((total_error - 0.02) / 0.025) * 22.0
+        elif total_error < 0.08:
+            symmetry_score = 70.0 - ((total_error - 0.045) / 0.035) * 22.0
+        elif total_error < 0.12:
+            symmetry_score = 48.0 - ((total_error - 0.08) / 0.04) * 20.0
+        else:
+            capped_error = min(total_error, 0.28)
+            symmetry_score = max(0.0, 28.0 - ((capped_error - 0.12) / 0.16) * 28.0)
         
         return float(max(0.0, min(100.0, symmetry_score)))
 
     def _g1_rhythmic_nodding(self, buf: list) -> float:
         # Rhythmic nodding: vertical head movement (pitch) showing agreement
-        if len(buf) < 20:
+        if len(buf) < 12:
             return 40.0
-        pitches = [b["pitch"] for b in buf[-20:]]
-        if np.std(pitches) < 1.0:
-            return 35.0
+        pitches = [b["pitch"] for b in buf[-12:]]
+        pitch_std = float(np.std(pitches))
+        if pitch_std < 0.6:
+            return 34.0
         # Simple: 1–2 “oscillations” in pitch
         d = np.diff(pitches)
         crosses = np.sum((d[:-1] * d[1:]) < 0)
         if 1 <= crosses <= 4:
-            return 70.0
-        return 45.0
+            return 68.0 + min(12.0, pitch_std * 4.0)
+        if pitch_std > 1.2:
+            return 48.0
+        return 42.0
 
     def _g1_parted_lips(self, cur: dict) -> float:
         mar = cur.get("mar", 0.2)
-        if 0.12 <= mar <= 0.35:
-            return 50.0 + (mar - 0.12) / 0.23 * 45.0
-        if 0.08 <= mar < 0.12:
-            return 35.0 + (mar - 0.08) / 0.04 * 15.0
-        if 0.35 < mar <= 0.5:
-            return 85.0 - (mar - 0.35) / 0.15 * 20.0
-        return 40.0
+        # Steeper: small MAR change -> larger score change
+        if 0.10 <= mar <= 0.36:
+            return 48.0 + (mar - 0.10) / 0.26 * 50.0  # 48-98
+        if 0.06 <= mar < 0.10:
+            return 38.0 + (mar - 0.06) / 0.04 * 10.0
+        if 0.36 < mar <= 0.52:
+            return 88.0 - (mar - 0.36) / 0.16 * 22.0
+        return 38.0 + min(12.0, mar * 25.0)
 
     def _g1_softened_forehead(self, lm: np.ndarray, cur: dict, buf: list) -> float:
-        # Low brow tension: eyebrow variance low, not furrowed
+        # Low brow tension: relaxed = flat brow (low variance) + inner/outer brow even (not furrowed)
         lb = _safe(lm, LEFT_EYEBROW)
         rb = _safe(lm, RIGHT_EYEBROW)
         if len(lb) < 2 or len(rb) < 2:
-            return 55.0
+            return 50.0
+        face_scale = max(20.0, cur.get("face_scale", 50.0))
+
+        # 1) Variance of brow points (low = flat = relaxed)
         v = float(np.var(np.vstack([lb[:, :2], rb[:, :2]])))
-        # Normalize variance by face scale squared (variance scales with area)
-        face_scale = cur.get("face_scale", 50.0)
         v_normalized = v / max(face_scale * face_scale, 1e-6)
-        # Thresholds: 5.0 -> 0.002, 20.0 -> 0.008 (relative to face scale^2)
-        if v_normalized < 0.002:
-            return 75.0
-        if v_normalized < 0.008:
-            return 65.0
-        return max(35.0, 70.0 - v_normalized * 5000.0)
+
+        # 2) Inner vs outer brow height: relaxed = similar height; furrowed = inner pulled down
+        # Left: inner = point closest to nose (min x), outer = max x
+        left_inner_y = float(lb[np.argmin(lb[:, 0]), 1])
+        left_outer_y = float(lb[np.argmax(lb[:, 0]), 1])
+        right_inner_y = float(rb[np.argmin(rb[:, 0]), 1])
+        right_outer_y = float(rb[np.argmax(rb[:, 0]), 1])
+        # Furrowed: inner lower than outer (higher y) -> diff > 0
+        inner_outer_diff_left = left_inner_y - left_outer_y
+        inner_outer_diff_right = right_inner_y - right_outer_y
+        diff_normalized = (abs(inner_outer_diff_left) + abs(inner_outer_diff_right)) / max(face_scale * 0.15, 1e-6)
+        evenness = max(0.0, 1.0 - min(1.0, diff_normalized))  # 1 = perfectly even, 0 = very furrowed
+
+        # Score from variance: low v_norm -> high (relaxed)
+        if v_normalized < 0.0008:
+            var_score = 85.0
+        elif v_normalized < 0.003:
+            var_score = 70.0 + (0.003 - v_normalized) / 0.0022 * 15.0
+        elif v_normalized < 0.008:
+            var_score = 50.0 + (0.008 - v_normalized) / 0.005 * 20.0
+        else:
+            var_score = max(30.0, 50.0 - (v_normalized - 0.008) * 1200.0)
+
+        # Combine: 60% variance (flat brow), 40% evenness (inner/outer similar = not furrowed)
+        raw = 50.0 + 0.5 * (var_score - 50.0) + 18.0 * evenness
+        return float(max(30.0, min(95.0, raw)))
 
     # ----- Group 2 -----
     def _g2_look_up_lr(self, cur: dict) -> float:
-        # Looking up and left/right: cognitive processing (accessing memory)
         p, y = cur.get("pitch", 0), cur.get("yaw", 0)
-        
-        # Looking up: positive pitch (nose up, eyes up) - matches Azure convention
-        # Looking left/right: yaw
-        looking_up = p > 5  # Positive pitch = looking up
-        looking_lr = abs(y) > 10  # Significant left/right turn
+        # Lower thresholds: small look-up/lr scores higher
+        looking_up = p > 3
+        looking_lr = abs(y) > 6
         
         if looking_up and looking_lr:
-            # Strong cognitive load: looking up AND to side
-            up_intensity = min(1.0, p / 25.0)  # 0-1, peaks at 25° (p is positive when looking up)
-            lr_intensity = min(1.0, abs(y) / 40.0)  # 0-1, peaks at 40°
+            up_intensity = min(1.0, p / 20.0)
+            lr_intensity = min(1.0, abs(y) / 32.0)
             combined = (up_intensity + lr_intensity) / 2.0
-            return 50.0 + combined * 40.0  # 50-90
+            return 50.0 + combined * 44.0
         elif looking_up:
-            # Just looking up
-            up_intensity = min(1.0, p / 20.0)  # p is positive when looking up
-            return 50.0 + up_intensity * 25.0  # 50-75
+            up_intensity = min(1.0, p / 14.0)
+            return 50.0 + up_intensity * 32.0
         elif looking_lr:
-            # Just looking left/right (less cognitive load indicator)
-            return 50.0
-        return 45.0  # Looking forward
+            lr_intensity = min(1.0, abs(y) / 35.0)
+            return 50.0 + lr_intensity * 18.0
+        return 46.0 + min(4.0, abs(p) * 0.4 + abs(y) * 0.2)
 
     def _g2_lip_pucker(self, lm: np.ndarray, cur: dict) -> float:
         """
@@ -843,13 +829,10 @@ class ExpressionSignifierEngine:
         # 1. High MAR (vertical opening) - indicates lips are pursed forward
         # 2. Narrow mouth width - indicates lips are compressed horizontally
         
-        # No pucker: normal MAR and normal width
-        if mar <= 0.25 and mw_normalized >= 0.18:
-            # Normal mouth, no pucker
-            return 10.0 + (mar / 0.25) * 10.0  # 10-20 (slight variation for natural range)
-        
-        # Slight pucker: elevated MAR OR narrow width, but not both strongly
-        if mar <= 0.30:
+        # No pucker: normal MAR and normal width (lower MAR threshold for sensitivity)
+        if mar <= 0.22 and mw_normalized >= 0.19:
+            return 10.0 + (mar / 0.22) * 12.0
+        if mar <= 0.28:
             # MAR not high enough for pucker
             if mw_normalized < 0.15:
                 # Narrow but not puckered (might be speaking or other expression)
@@ -858,53 +841,35 @@ class ExpressionSignifierEngine:
                 # Normal mouth
                 return 5.0 + (mar / 0.30) * 15.0  # 5-20
         
-        # Moderate to strong pucker: requires both high MAR AND narrow width
-        # Check if mouth is actually narrow (pursed)
         if mw_normalized >= 0.20:
-            # Mouth too wide for pucker, even with high MAR (might be yawning or speaking)
-            return 15.0 + min(15.0, (mar - 0.30) / 0.10 * 15.0)  # 15-30
+            return 15.0 + min(18.0, (mar - 0.28) / 0.08 * 18.0)
         
-        # We have high MAR (>0.30) AND narrow mouth (<0.20 normalized width)
-        # This indicates actual lip pucker
-        
-        # Strong pucker: very high MAR with very narrow mouth
-        if mar > 0.40 and mw_normalized < 0.12:
-            # Very strong pucker
-            pucker_intensity = min(1.0, (mar - 0.40) / 0.15)  # 0-1 for mar 0.40-0.55
-            return 85.0 + pucker_intensity * 15.0  # 85-100
-        
-        # Moderate pucker: high MAR with narrow mouth
-        elif mar > 0.35 and mw_normalized < 0.15:
-            # Strong pucker
-            pucker_intensity = (mar - 0.35) / 0.05  # 0-1 for mar 0.35-0.40
-            return 70.0 + pucker_intensity * 15.0  # 70-85
-        
-        # Moderate pucker: elevated MAR with narrow mouth
-        elif mar > 0.30 and mw_normalized < 0.18:
-            # Moderate pucker
-            mar_factor = (mar - 0.30) / 0.05  # 0-1 for mar 0.30-0.35
-            width_factor = (0.18 - mw_normalized) / 0.06  # 0-1 for width 0.12-0.18
+        # High MAR and narrow mouth = pucker (lower MAR threshold 0.28)
+        if mar > 0.38 and mw_normalized < 0.12:
+            pucker_intensity = min(1.0, (mar - 0.38) / 0.14)
+            return 86.0 + pucker_intensity * 14.0
+        elif mar > 0.32 and mw_normalized < 0.15:
+            pucker_intensity = (mar - 0.32) / 0.06
+            return 70.0 + pucker_intensity * 16.0
+        elif mar > 0.28 and mw_normalized < 0.18:
+            mar_factor = (mar - 0.28) / 0.04
+            width_factor = (0.18 - mw_normalized) / 0.06
             pucker_intensity = (mar_factor + width_factor) / 2.0
-            return 50.0 + pucker_intensity * 20.0  # 50-70
-        
-        # Borderline: high MAR but width not narrow enough, or narrow but MAR not high enough
+            return 50.0 + pucker_intensity * 24.0
         else:
-            # Slight pucker or ambiguous
-            mar_contribution = max(0.0, (mar - 0.25) / 0.10)  # 0-1 for mar 0.25-0.35
-            width_contribution = max(0.0, (0.20 - mw_normalized) / 0.08)  # 0-1 for width 0.12-0.20
+            mar_contribution = max(0.0, (mar - 0.22) / 0.10)
+            width_contribution = max(0.0, (0.20 - mw_normalized) / 0.08)
             combined = (mar_contribution + width_contribution) / 2.0
-            return 30.0 + combined * 20.0  # 30-50
-        
-        # Fallback (shouldn't reach here)
-        return 10.0
+            return 28.0 + combined * 24.0
 
     def _g2_eye_squint(self, cur: dict) -> float:
         ear = cur.get("ear", 0.2)
-        if 0.10 <= ear <= 0.18:
-            return 50.0 + (0.18 - ear) / 0.08 * 45.0
-        if ear < 0.10:
-            return 85.0
-        return 35.0
+        # Steeper: small EAR drop -> larger score increase
+        if 0.11 <= ear <= 0.19:
+            return 50.0 + (0.19 - ear) / 0.08 * 48.0
+        if ear < 0.11:
+            return 88.0 - ear * 25.0  # 85-88 for very narrow
+        return 32.0 + (ear - 0.19) * 80.0 if ear < 0.22 else 35.0
 
     def _g2_thinking_brow(self, lm: np.ndarray) -> float:
         lb = _safe(lm, LEFT_EYEBROW)
@@ -920,30 +885,28 @@ class ExpressionSignifierEngine:
             # Estimate from face width
             face_scale = float(np.max(lm[:, 0]) - np.min(lm[:, 0])) * 0.5 if lm.shape[0] > 0 else 50.0
         face_scale = max(20.0, face_scale)
-        # Thresholds relative to face scale: 2px -> 4%, 12px -> 24%, 15px -> 30%
         d_rel = d / face_scale
-        if 0.04 <= d_rel <= 0.24:
-            return 70.0
-        if 0.02 <= d_rel <= 0.30:
-            return 55.0
-        return 45.0
+        # More sensitive: smaller asymmetry (thinking brow) scores high
+        if 0.03 <= d_rel <= 0.20:
+            return 72.0
+        if 0.018 <= d_rel <= 0.28:
+            return 58.0 + min(12.0, d_rel * 80.0)
+        return 44.0
 
     def _g2_stillness(self, buf: list) -> float:
-        if len(buf) < 10:
+        if len(buf) < 8:
             return 50.0
-        vars_list = [b["face_var"] for b in buf[-12:]]
-        scales = [b.get("face_scale", 50.0) for b in buf[-12:]]
-        # Normalize variance by average face scale squared
+        vars_list = [b["face_var"] for b in buf[-8:]]
+        scales = [b.get("face_scale", 50.0) for b in buf[-8:]]
         avg_scale = float(np.mean(scales)) if scales else 50.0
-        avg_scale_sq = max(400.0, avg_scale * avg_scale)  # min 20^2
+        avg_scale_sq = max(400.0, avg_scale * avg_scale)
         m = float(np.mean(vars_list))
         m_normalized = m / avg_scale_sq
-        # Thresholds: 5.0 -> 0.002, 15.0 -> 0.006 (relative to face scale^2)
-        if m_normalized < 0.002:
-            return 75.0
-        if m_normalized < 0.006:
-            return 60.0
-        return 45.0
+        if m_normalized < 0.0014:
+            return 78.0
+        if m_normalized < 0.005:
+            return 62.0 + (0.005 - m_normalized) / 0.0036 * 16.0
+        return 44.0
 
     def _g2_lowered_brow(self, lm: np.ndarray) -> float:
         # Lowered brow (furrowed): cognitive load or concentration
@@ -971,16 +934,14 @@ class ExpressionSignifierEngine:
         # Normalize distance
         dist_rel = dist / face_scale
         
-        # Furrowed: dist_rel < 0.20 (brow close to eye)
-        # Normal: dist_rel 0.20-0.30
-        # Raised: dist_rel > 0.30
-        if dist_rel < 0.15:  # Strongly furrowed
-            return 80.0
-        elif dist_rel < 0.20:  # Moderately furrowed
-            return 65.0 + (0.20 - dist_rel) / 0.05 * 10.0  # 65-75
-        elif dist_rel < 0.25:  # Slightly furrowed
-            return 55.0 + (0.25 - dist_rel) / 0.05 * 10.0  # 55-65
-        return 45.0  # Normal or raised
+        # More sensitive bands
+        if dist_rel < 0.14:
+            return 82.0
+        elif dist_rel < 0.19:
+            return 66.0 + (0.19 - dist_rel) / 0.05 * 14.0
+        elif dist_rel < 0.24:
+            return 54.0 + (0.24 - dist_rel) / 0.05 * 12.0
+        return 44.0
 
     # ----- Group 3 -----
     def _g3_contempt(self, lm: np.ndarray, ml: np.ndarray, mr: np.ndarray, fr: Optional[FaceDetectionResult]) -> float:
@@ -995,45 +956,41 @@ class ExpressionSignifierEngine:
             else:
                 face_scale = float(np.max(lm[:, 0]) - np.min(lm[:, 0])) * 0.5 if lm.shape[0] > 0 else 50.0
             face_scale = max(20.0, face_scale)
-            # Threshold relative to face scale: 4px -> 8%
             asymmetry = abs(ly - ry)
-            if asymmetry > face_scale * 0.08:
-                return min(100.0, 30.0 + (asymmetry / face_scale) * 625.0)  # Scale score by relative asymmetry
-        return 20.0
+            if asymmetry > face_scale * 0.05:  # More sensitive: smaller asymmetry scores
+                return min(100.0, 28.0 + (asymmetry / face_scale) * 720.0)
+        return 18.0
 
     def _g3_nose_crinkle(self, cur: dict, buf: list) -> float:
-        # Nose crinkle shortens vertical extent (bridge→tip); detect drop vs recent average.
         nh = cur.get("nose_height", 0.0)
-        if nh <= 0 or len(buf) < 6:
+        if nh <= 0 or len(buf) < 5:
             return 12.0
-        recent = [b.get("nose_height", nh) for b in buf[-8:-1] if b.get("nose_height", 0) > 0]
+        recent = [b.get("nose_height", nh) for b in buf[-5:-1] if b.get("nose_height", 0) > 0]
         if not recent:
             return 12.0
         avg = float(np.mean(recent))
         if avg <= 1e-6:
             return 12.0
-        if nh < avg * 0.88:  # clear shortening
-            return 55.0 + min(35.0, (1.0 - nh / avg) * 80.0)
-        if nh < avg * 0.95:
-            return 35.0
+        if nh < avg * 0.92:  # More sensitive: smaller shortening scores
+            return 55.0 + min(38.0, (1.0 - nh / avg) * 95.0)
+        if nh < avg * 0.97:
+            return 32.0 + (0.97 - nh / avg) * 80.0
         return 12.0
 
     def _g3_lip_compression(self, cur: dict) -> float:
-        # Use inner MAR (d13–14 / d61–17) when available; more accurate for pressed lips.
         mar = cur.get("mar_inner", cur.get("mar", 0.2))
-        if mar < 0.05:
-            return 88.0
-        if mar < 0.08:
-            return 68.0 + (0.08 - mar) / 0.03 * 10.0
-        if mar < 0.12:
-            return 40.0 + (0.12 - mar) / 0.04 * 20.0
-        if mar < 0.18:
-            return 20.0 + (0.18 - mar) / 0.06 * 15.0
-        return 15.0
+        # Steeper: small MAR drop -> larger score increase
+        if mar < 0.045:
+            return 90.0
+        if mar < 0.07:
+            return 70.0 + (0.07 - mar) / 0.025 * 18.0
+        if mar < 0.10:
+            return 42.0 + (0.10 - mar) / 0.03 * 22.0
+        if mar < 0.16:
+            return 22.0 + (0.16 - mar) / 0.06 * 18.0
+        return 14.0
 
     def _g3_eye_block(self, buf: list) -> float:
-        # Prolonged closure (blocking): EAR < 0.10 to exclude normal blink tails.
-        # ~30fps: 10 frames ≈ 0.33 s, 20 frames ≈ 0.67 s.
         if len(buf) < 5:
             return 8.0
         run = 0
@@ -1042,10 +999,10 @@ class ExpressionSignifierEngine:
                 run += 1
             else:
                 break
-        if run >= 20:
+        if run >= 18:
             return 90.0
-        if run >= 10:
-            return 50.0 + (run - 10) / 10 * 38.0
+        if run >= 6:  # Shorter run still scores (lower latency)
+            return 48.0 + (run - 6) / 12 * 40.0
         return 8.0
 
     def _g3_jaw_clench(self, lm: np.ndarray, cur: dict, fr: Optional[FaceDetectionResult]) -> float:
@@ -1061,12 +1018,12 @@ class ExpressionSignifierEngine:
             # Threshold relative to face scale: 3px -> 6%
             threshold = face_scale * 0.06
             corners_down = (ly + ry) / 2 > mid + threshold
-        if mar < 0.07:
-            return min(95.0, 78.0 + (12.0 if corners_down else 0.0))
-        if mar < 0.10:
-            return 52.0 + (0.10 - mar) / 0.03 * 18.0 + (8.0 if corners_down else 0.0)
-        if mar < 0.13:
-            return 28.0 + (0.13 - mar) / 0.03 * 18.0 + (7.0 if corners_down else 0.0)
+        if mar < 0.065:
+            return min(96.0, 80.0 + (12.0 if corners_down else 0.0))
+        if mar < 0.095:
+            return 54.0 + (0.095 - mar) / 0.03 * 22.0 + (8.0 if corners_down else 0.0)
+        if mar < 0.12:
+            return 30.0 + (0.12 - mar) / 0.025 * 20.0 + (6.0 if corners_down else 0.0)
         return 12.0
 
     def _g3_rapid_blink(self) -> float:
@@ -1089,108 +1046,83 @@ class ExpressionSignifierEngine:
         yaw_dev = abs(y)
         total_dev = np.sqrt(pitch_dev * pitch_dev + yaw_dev * yaw_dev)
         
-        # Significant aversion: >20° total deviation
-        if total_dev > 20.0:
-            return 30.0 + min(60.0, (total_dev - 20.0) / 30.0 * 60.0)  # 30-90
-        elif total_dev > 10.0:
-            return 20.0 + (total_dev - 10.0) / 10.0 * 10.0  # 20-30
-        elif total_dev > 5.0:
-            return 15.0 + (total_dev - 5.0) / 5.0 * 5.0  # 15-20
-        return 10.0  # Looking forward
+        # More sensitive: smaller deviation scores higher aversion
+        if total_dev > 14.0:
+            return 32.0 + min(58.0, (total_dev - 14.0) / 28.0 * 58.0)
+        elif total_dev > 6.0:
+            return 20.0 + (total_dev - 6.0) / 8.0 * 12.0
+        elif total_dev > 3.0:
+            return 14.0 + (total_dev - 3.0) / 3.0 * 6.0
+        return 10.0
 
     def _g3_no_nod(self, buf: list) -> float:
-        # No nod: absence of nodding (resistance indicator)
-        # High score = no nodding = resistance
-        if len(buf) < 20:
+        if len(buf) < 12:
             return 10.0
-        
-        # Check for nodding in pitch (vertical movement)
-        pitches = [b["pitch"] for b in buf[-30:]]
+        pitches = [b["pitch"] for b in buf[-14:]]
         pitch_std = float(np.std(pitches))
         pitch_range = float(np.max(pitches) - np.min(pitches))
-        
-        # Detect oscillations in pitch
         d = np.diff(pitches)
         zero_crossings = np.sum((d[:-1] * d[1:]) < 0)
-        
-        # No nodding: low variation, no oscillations, or very small range
-        if pitch_std < 1.0 and pitch_range < 3.0:
-            # Very still, no nodding
-            return 80.0
-        elif pitch_std < 1.5 and pitch_range < 5.0 and zero_crossings < 2:
-            # Minimal movement, no clear nodding pattern
-            return 60.0 + (1.5 - pitch_std) / 0.5 * 15.0  # 60-75
+        if pitch_std < 0.7 and pitch_range < 2.5:
+            return 82.0
+        elif pitch_std < 1.2 and pitch_range < 4.0 and zero_crossings < 2:
+            return 62.0 + (1.2 - pitch_std) / 0.5 * 14.0
         elif zero_crossings < 1:
-            # No oscillations detected
-            return 50.0
-        
-        # Nodding detected = low resistance score
-        return 15.0
+            return 52.0
+        return 14.0
 
     def _g3_narrowed_pupils(self, cur: dict) -> float:
         ear = cur.get("ear", 0.2)
-        if ear < 0.14:
-            return 50.0 + (0.14 - ear) / 0.14 * 40.0
-        return 20.0
+        if ear < 0.13:
+            return 52.0 + (0.13 - ear) / 0.13 * 42.0
+        if ear < 0.17:
+            return 22.0 + (0.17 - ear) / 0.04 * 28.0
+        return 18.0
 
     # ----- Group 4 -----
     def _g4_relaxed_exhale(self, buf: list) -> float:
-        # Relaxed exhale: decrease in facial tension + mouth opening
-        if len(buf) < 10:
+        if len(buf) < 6:
             return 50.0
-        
-        # Get face scales for normalization
-        scales_now = [b.get("face_scale", 50.0) for b in buf[-3:]]
-        scales_before = [b.get("face_scale", 50.0) for b in buf[-10:-5]]
+        scales_now = [b.get("face_scale", 50.0) for b in buf[-2:]]
+        scales_before = [b.get("face_scale", 50.0) for b in buf[-6:-3]]
         avg_scale_now = float(np.mean(scales_now)) if scales_now else 50.0
         avg_scale_before = float(np.mean(scales_before)) if scales_before else 50.0
-        
-        # Normalize variance by face scale squared
-        var_now_raw = np.mean([b["face_var"] for b in buf[-3:]])
-        var_before_raw = np.mean([b["face_var"] for b in buf[-10:-5]])
+        var_now_raw = np.mean([b["face_var"] for b in buf[-2:]])
+        var_before_raw = np.mean([b["face_var"] for b in buf[-6:-3]])
         var_now = var_now_raw / max(avg_scale_now * avg_scale_now, 1e-6)
         var_before = var_before_raw / max(avg_scale_before * avg_scale_before, 1e-6)
-        
-        mar_now = np.mean([b["mar"] for b in buf[-3:]])
-        mar_before = np.mean([b["mar"] for b in buf[-10:-5]])
-        
-        # Relaxed exhale: tension decrease (variance drop) + mouth opening (MAR increase)
-        tension_drop = var_before > 0 and var_now < var_before * 0.7
-        mouth_opening = mar_before > 0 and mar_now > mar_before * 1.05
-        
+        mar_now = np.mean([b["mar"] for b in buf[-2:]])
+        mar_before = np.mean([b["mar"] for b in buf[-6:-3]])
+        tension_drop = var_before > 0 and var_now < var_before * 0.82  # More sensitive
+        mouth_opening = mar_before > 0 and mar_now > mar_before * 1.03
         if tension_drop and mouth_opening:
-            # Strong relaxed exhale signal
-            return 75.0 + min(20.0, (mar_now / mar_before - 1.05) * 100.0)  # 75-95
+            return 76.0 + min(22.0, (mar_now / mar_before - 1.03) * 120.0)
         elif tension_drop:
-            # Just tension decrease
-            return 60.0 + min(15.0, (1.0 - var_now / var_before) * 30.0)  # 60-75
-        return 45.0
+            return 62.0 + min(18.0, (1.0 - var_now / var_before) * 38.0)
+        return 44.0
 
     def _g4_fixed_gaze(self, buf: list, w: int, h: int) -> float:
-        if len(buf) < 8:
+        if len(buf) < 5:
             return 50.0
-        gx = [b["gaze_x"] for b in buf[-10:]]
-        gy = [b["gaze_y"] for b in buf[-10:]]
+        gx = [b["gaze_x"] for b in buf[-5:]]
+        gy = [b["gaze_y"] for b in buf[-5:]]
         std = np.sqrt(np.var(gx) + np.var(gy))
-        # Normalize by average face scale for size invariance
-        scales = [b.get("face_scale", 50.0) for b in buf[-10:]]
+        scales = [b.get("face_scale", 50.0) for b in buf[-5:]]
         avg_scale = float(np.mean(scales)) if scales else 50.0
         std_normalized = std / max(avg_scale, 1e-6)
-        # Thresholds: 15px -> 30%, 35px -> 70% of inter-ocular distance
-        if std_normalized < 0.30:
-            return 70.0
-        if std_normalized < 0.70:
-            return 55.0
-        return 40.0
+        if std_normalized < 0.22:
+            return 74.0
+        if std_normalized < 0.50:
+            return 58.0 + (0.50 - std_normalized) / 0.28 * 16.0
+        return 38.0
 
     def _g4_smile_transition(self, buf: list, duchenne: float) -> float:
-        if len(buf) < 20 or duchenne < 50:
+        if len(buf) < 10 or duchenne < 50:
             return 45.0
-        mars = [b["mar"] for b in buf[-20:]]
-        # Sustained moderate MAR + Duchenne
-        sustained = np.mean(mars[-10:]) > 0.18 and np.std(mars[-10:]) < 0.04
-        if sustained and duchenne >= 60:
-            return 80.0
-        if duchenne >= 55:
-            return 60.0
-        return 50.0
+        mars = [b["mar"] for b in buf[-10:]]
+        sustained = np.mean(mars[-5:]) > 0.15 and np.std(mars[-5:]) < 0.045  # More sensitive
+        if sustained and duchenne >= 58:
+            return 82.0
+        if duchenne >= 54:
+            return 62.0 + min(12.0, (duchenne - 54) * 0.5)
+        return 48.0

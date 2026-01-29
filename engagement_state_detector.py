@@ -31,6 +31,7 @@ from utils.azure_face_detector import AzureFaceAPIDetector
 from utils.azure_landmark_mapper import expand_azure_landmarks_to_mediapipe
 from utils.business_meeting_feature_extractor import BusinessMeetingFeatureExtractor
 from utils.expression_signifiers import ExpressionSignifierEngine
+from utils.azure_engagement_metrics import get_all_azure_metrics
 from utils import signifier_weights
 
 
@@ -76,6 +77,8 @@ class EngagementState:
     face_detected: bool  # Whether a face was detected in current frame
     confidence: float  # Confidence in the measurement (0-1)
     signifier_scores: Optional[dict] = None  # 30 expression signifier scores (0-100 each)
+    detection_method: Optional[str] = None  # "mediapipe" | "azure_face_api"
+    azure_metrics: Optional[dict] = None  # When Azure: { base, composite, score }; for frontend
 
 
 class EngagementStateDetector:
@@ -96,7 +99,7 @@ class EngagementStateDetector:
     
     def __init__(
         self,
-        smoothing_window: int = 10,
+        smoothing_window: int = 4,
         min_face_confidence: float = 0.5,
         update_callback: Optional[Callable[[EngagementState], None]] = None,
         detection_method: Optional[str] = None,
@@ -106,7 +109,7 @@ class EngagementStateDetector:
         Initialize the engagement state detector.
         
         Args:
-            smoothing_window: Number of frames to average for smoothing (default: 10)
+            smoothing_window: Number of frames to average for smoothing (default: 4, low latency)
             min_face_confidence: Minimum confidence for face detection (default: 0.5)
             update_callback: Optional callback function called when state updates
             detection_method: Face detection method to use ("mediapipe" or "azure_face_api").
@@ -148,13 +151,13 @@ class EngagementStateDetector:
         self.scorer = EngagementScorer()
         self.context_generator = ContextGenerator()
         self.feature_extractor = BusinessMeetingFeatureExtractor()
-        buf = 15 if self.lightweight_mode else 45
+        buf = 12 if self.lightweight_mode else 22
         self.signifier_engine = ExpressionSignifierEngine(
             buffer_frames=buf,
             weights_provider=signifier_weights.get_weights,
         )
 
-        # State management
+        # State management (smaller windows for real-time, low-latency updates)
         self.current_state: Optional[EngagementState] = None
         self.score_history: deque = deque(maxlen=smoothing_window)
         self.metrics_history: deque = deque(maxlen=smoothing_window)
@@ -245,12 +248,13 @@ class EngagementStateDetector:
                 print(f"  Source path: {source_path}")
             return False
         
-        # Verify we can read at least one frame
-        ret, test_frame = self.video_handler.read_frame()
-        if not ret or test_frame is None:
-            print("Error: Video source initialized but cannot read frames")
-            self.video_handler.release()
-            return False
+        # Verify we can read at least one frame (skip for PARTNER; frames arrive async from frontend)
+        if source_type != VideoSourceType.PARTNER:
+            ret, test_frame = self.video_handler.read_frame()
+            if not ret or test_frame is None:
+                print("Error: Video source initialized but cannot read frames")
+                self.video_handler.release()
+                return False
         
         print(f"Engagement detection started: source_type={source_type}, source_path={source_path}")
         
@@ -406,29 +410,42 @@ class EngagementStateDetector:
             self.consecutive_no_face_frames += 1
             return self._make_no_face_state()
 
-        # Azure 27-point landmarks: expand to MediaPipe 468 layout for signifiers/feature extractor
-        if self.face_detector.get_name() == "azure_face_api" and landmarks.shape[0] <= 27:
-            bbox = getattr(face_result, "bounding_box", None)
-            landmarks = expand_azure_landmarks_to_mediapipe(landmarks, bbox, frame.shape)
+        is_azure = self.face_detector.get_name() == "azure_face_api"
+        azure_result = None
 
-        if self.lightweight_mode:
-            self.signifier_engine.update(landmarks, face_result, frame.shape)
-            signifier_scores = self.signifier_engine.get_all_scores()
-            score = self.signifier_engine.get_composite_score(signifier_scores)
-            metrics = self._metrics_from_signifiers(signifier_scores)
+        if is_azure:
+            # Azure path: use 27 landmarks + emotions for engagement; separate metrics for frontend
+            azure_result = get_all_azure_metrics(face_result)
+            score = azure_result["score"]
+            signifier_scores = None  # Frontend shows Azure metrics panel instead
+            metrics = self._metrics_from_azure(azure_result)
         else:
-            blendshape_features = self.feature_extractor.extract_features(
-                landmarks, frame.shape, face_result
-            )
-            metrics = self.scorer.compute_metrics(blendshape_features, landmarks, frame.shape)
-            self.signifier_engine.update(landmarks, face_result, frame.shape)
-            signifier_scores = self.signifier_engine.get_all_scores()
-            score = self.signifier_engine.get_composite_score(signifier_scores)
+            # MediaPipe path: expand Azure 27 to MediaPipe 468 only when not using Azure detector
+            if landmarks.shape[0] <= 27:
+                bbox = getattr(face_result, "bounding_box", None)
+                landmarks = expand_azure_landmarks_to_mediapipe(landmarks, bbox, frame.shape)
+
+            if self.lightweight_mode:
+                self.signifier_engine.update(landmarks, face_result, frame.shape)
+                signifier_scores = self.signifier_engine.get_all_scores()
+                score = self.signifier_engine.get_composite_score(signifier_scores)
+                metrics = self._metrics_from_signifiers(signifier_scores)
+            else:
+                blendshape_features = self.feature_extractor.extract_features(
+                    landmarks, frame.shape, face_result
+                )
+                metrics = self.scorer.compute_metrics(blendshape_features, landmarks, frame.shape)
+                self.signifier_engine.update(landmarks, face_result, frame.shape)
+                signifier_scores = self.signifier_engine.get_all_scores()
+                score = self.signifier_engine.get_composite_score(signifier_scores)
 
         if not np.isfinite(score) or score < 0 or score > 100:
-            score = float(self.scorer.calculate_score(metrics)) if not self.lightweight_mode else (
-                float(np.mean(list(signifier_scores.values()))) if signifier_scores else 50.0
-            )
+            if is_azure:
+                score = 0.0
+            else:
+                score = float(self.scorer.calculate_score(metrics)) if not self.lightweight_mode else (
+                    float(np.mean(list(signifier_scores.values()))) if signifier_scores else 0.0
+                )
         score = max(0.0, min(100.0, score))
         
         # Use raw score for real-time, quick-actionable insights (no 10-frame averaging)
@@ -438,7 +455,7 @@ class EngagementStateDetector:
         # Real-time score: use current frame score directly
         realtime_score = score
         if not np.isfinite(realtime_score):
-            realtime_score = 50.0
+            realtime_score = 0.0
         realtime_score = max(0.0, min(100.0, realtime_score))
         smoothed_metrics = self._average_metrics() if self.metrics_history else metrics
         
@@ -473,21 +490,36 @@ class EngagementStateDetector:
             timestamp=time.time(),
             face_detected=True,
             confidence=confidence,
-            signifier_scores=signifier_scores
+            signifier_scores=signifier_scores,
+            detection_method=self.detection_method,
+            azure_metrics=azure_result if is_azure else None,
         )
     
     def _metrics_from_signifiers(self, s: dict) -> EngagementMetrics:
         """Build EngagementMetrics from 30 signifier scores (lightweight path)."""
         def m(*keys: str) -> float:
-            vals = [s.get(k, 50.0) for k in keys if k in s]
-            return float(np.mean(vals)) if vals else 50.0
+            vals = [s.get(k, 0.0) for k in keys if k in s]
+            return float(np.mean(vals)) if vals else 0.0
         return EngagementMetrics(
             attention=m("g1_duchenne", "g1_eye_contact", "g1_eyebrow_flash", "g1_pupil_dilation"),
-            eye_contact=float(s.get("g1_eye_contact", 50.0)),
+            eye_contact=float(s.get("g1_eye_contact", 0.0)),
             facial_expressiveness=m("g1_duchenne", "g1_parted_lips", "g4_smile_transition", "g1_softened_forehead"),
             head_movement=m("g1_head_tilt", "g1_rhythmic_nodding", "g1_forward_lean"),
-            symmetry=float(s.get("g1_facial_symmetry", 50.0)),
-            mouth_activity=float(s.get("g1_parted_lips", 50.0)),
+            symmetry=float(s.get("g1_facial_symmetry", 0.0)),
+            mouth_activity=float(s.get("g1_parted_lips", 0.0)),
+        )
+
+    def _metrics_from_azure(self, azure_result: dict) -> EngagementMetrics:
+        """Build EngagementMetrics from Azure emotion + composite metrics for context/coaching."""
+        comp = azure_result.get("composite") or {}
+        base = azure_result.get("base") or {}
+        return EngagementMetrics(
+            attention=float(comp.get("focused", 0.0)),
+            eye_contact=float(comp.get("focused", 0.0)),
+            facial_expressiveness=float(base.get("happiness", 0.0) * 0.5 + base.get("surprise", 0.0) * 0.5),
+            head_movement=0.0,  # Azure emotions don't provide head movement
+            symmetry=0.0,
+            mouth_activity=float(base.get("happiness", 0.0)),
         )
 
     def _make_no_face_state(self) -> EngagementState:

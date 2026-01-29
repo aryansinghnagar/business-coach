@@ -1,22 +1,17 @@
 """
-Simple GUI Launcher for Business Meeting Copilot
-Allows non-technical users to easily start and stop the application.
+Lightweight GUI Launcher for Business Meeting Copilot
+Simple, fast launcher. Stop and Restart buttons run stop_server.bat and
+restart_server.bat (Windows); on other platforms uses built-in logic.
 
 Usage:
     python gui_launcher.py
-    
-Or simply double-click the file to run it.
 """
 
 try:
     import tkinter as tk
-    from tkinter import ttk, scrolledtext, messagebox
-except ImportError as e:
-    print(f"Error: Tkinter is not available. {e}")
-    print("\nPlease install tkinter:")
-    print("  Windows: Usually included with Python")
-    print("  Linux: sudo apt-get install python3-tk")
-    print("  Mac: Usually included with Python")
+    from tkinter import ttk, messagebox
+except ImportError:
+    print("Error: Tkinter not available. Please install python3-tk")
     sys.exit(1)
 
 import subprocess
@@ -24,435 +19,373 @@ import threading
 import sys
 import os
 import time
-try:
-    import requests
-except ImportError:
-    print("Warning: requests module not found. Some features may not work.")
-    requests = None
+import socket
 from pathlib import Path
 
-class ProjectLauncher:
+class LightweightLauncher:
     def __init__(self, root):
-        try:
-            self.root = root
-            self.root.title("Business Meeting Copilot - Launcher")
-            self.root.geometry("750x600")
-            self.root.resizable(True, True)
-            
-            # Set minimum window size
-            self.root.minsize(600, 500)
-            
-            # Server process
-            self.server_process = None
-            self.is_running = False
-            
-            # Setup UI
-            self.setup_ui()
-            
-            # Check initial status
-            self.check_server_status()
-            
-            # Auto-check status every 2 seconds
-            self.auto_check_status()
-        except Exception as e:
-            # If UI setup fails, show error
-            error_msg = f"Error initializing GUI: {str(e)}"
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
-            try:
-                messagebox.showerror("Initialization Error", error_msg)
-            except:
-                pass
-            raise
+        self.root = root
+        self.root.title("Business Meeting Copilot")
+        self.root.geometry("400x200")
+        self.root.resizable(False, False)
+        
+        # Server state
+        self.server_process = None
+        self.is_running = False
+        self._checking = False
+        self.script_dir = Path(__file__).resolve().parent
+        
+        # Setup UI
+        self.setup_ui()
+        
+        # Start status monitoring
+        self.check_status()
     
     def setup_ui(self):
-        """Create the user interface."""
+        """Create minimal, efficient UI."""
         # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(3, weight=1)  # Log area should expand
+        main = ttk.Frame(self.root, padding="15")
+        main.pack(fill=tk.BOTH, expand=True)
         
         # Title
-        title_label = ttk.Label(
-            main_frame,
-            text="Business Meeting Copilot",
-            font=("Arial", 16, "bold")
-        )
-        title_label.grid(row=0, column=0, pady=(0, 15), sticky=tk.W+tk.E)
+        title = ttk.Label(main, text="Business Meeting Copilot", font=("Arial", 14, "bold"))
+        title.pack(pady=(0, 15))
         
-        # Status section
-        status_frame = ttk.LabelFrame(main_frame, text="Status", padding="10")
-        status_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        status_frame.columnconfigure(1, weight=1)
+        # Status row
+        status_frame = ttk.Frame(main)
+        status_frame.pack(fill=tk.X, pady=(0, 15))
         
-        # Status label and indicator in a horizontal frame
-        status_inner = ttk.Frame(status_frame)
-        status_inner.grid(row=0, column=0, sticky=tk.W)
+        self.status_indicator = tk.Canvas(status_frame, width=16, height=16, highlightthickness=0)
+        self.status_indicator.pack(side=tk.LEFT, padx=(0, 8))
         
-        self.status_label = ttk.Label(
-            status_inner,
-            text="Checking...",
-            font=("Arial", 10)
-        )
-        self.status_label.pack(side=tk.LEFT, padx=(0, 10))
+        self.status_label = ttk.Label(status_frame, text="Checking...", font=("Arial", 10))
+        self.status_label.pack(side=tk.LEFT)
         
-        # Status indicator
-        try:
-            bg_color = status_frame.cget("background")
-        except:
-            bg_color = "SystemButtonFace"  # Default Windows background
+        # Buttons row
+        btn_frame = ttk.Frame(main)
+        btn_frame.pack(fill=tk.X, pady=(0, 10))
         
-        self.status_indicator = tk.Canvas(
-            status_inner,
-            width=20,
-            height=20,
-            highlightthickness=0,
-            bg=bg_color
-        )
-        self.status_indicator.pack(side=tk.LEFT)
+        self.start_btn = ttk.Button(btn_frame, text="Start", command=self.start_server, width=10)
+        self.start_btn.pack(side=tk.LEFT, padx=2)
         
-        # Control buttons - use grid for better layout
-        button_frame = ttk.LabelFrame(main_frame, text="Controls", padding="10")
-        button_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
-        button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
-        button_frame.columnconfigure(2, weight=1)
+        self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop_server, width=10, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=2)
         
-        # Start button
-        self.start_button = ttk.Button(
-            button_frame,
-            text="Start Server",
-            command=self.start_server,
-            width=25
-        )
-        self.start_button.grid(row=0, column=0, padx=5, sticky=tk.W+tk.E)
+        self.restart_btn = ttk.Button(btn_frame, text="Restart", command=self.restart_server, width=10, state=tk.DISABLED)
+        self.restart_btn.pack(side=tk.LEFT, padx=2)
         
-        # Stop button
-        self.stop_button = ttk.Button(
-            button_frame,
-            text="Stop Server",
-            command=self.stop_server,
-            width=25,
-            state=tk.DISABLED
-        )
-        self.stop_button.grid(row=0, column=1, padx=5, sticky=tk.W+tk.E)
+        self.browser_btn = ttk.Button(btn_frame, text="Open Browser", command=self.open_browser, width=12, state=tk.DISABLED)
+        self.browser_btn.pack(side=tk.LEFT, padx=2)
         
-        # Open Browser button
-        self.browser_button = ttk.Button(
-            button_frame,
-            text="Open in Browser",
-            command=self.open_browser,
-            width=25
-        )
-        self.browser_button.grid(row=0, column=2, padx=5, sticky=tk.W+tk.E)
-        
-        # Log output area
-        log_frame = ttk.LabelFrame(main_frame, text="Server Logs", padding="5")
-        log_frame.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-        
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            height=12,
-            wrap=tk.WORD,
-            font=("Consolas", 9),
-            bg="#f5f5f5",
-            fg="#000000"
-        )
-        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.log_text.config(state=tk.DISABLED)
-        
-        # Info section
-        info_frame = ttk.LabelFrame(main_frame, text="Instructions", padding="10")
-        info_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 0))
-        
-        info_text = (
-            "1. Click 'Start Server' to launch the application\n"
-            "2. Wait for the server to start (status will turn green)\n"
-            "3. Click 'Open in Browser' to access the application\n"
-            "4. Click 'Stop Server' when you're done"
-        )
-        info_label = ttk.Label(
-            info_frame,
-            text=info_text,
-            font=("Arial", 9),
-            foreground="gray",
-            justify=tk.LEFT
-        )
-        info_label.pack(anchor=tk.W)
+        # Log line
+        self.log_label = ttk.Label(main, text="", font=("Consolas", 8), foreground="gray", wraplength=370)
+        self.log_label.pack(fill=tk.X, pady=(5, 0))
+    
+    def update_status(self, text, color="gray"):
+        """Update status indicator and label."""
+        self.status_label.config(text=text)
+        self.status_indicator.delete("all")
+        bg = self.status_indicator.cget("bg")
+        self.status_indicator.create_oval(2, 2, 14, 14, fill=color, outline="black", width=1)
+        self.status_indicator.config(bg=bg)
     
     def log(self, message):
-        """Add a message to the log area."""
-        self.log_text.config(state=tk.NORMAL)
-        timestamp = time.strftime("%H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        """Update log line (single line only for lightweight)."""
+        self.log_label.config(text=message[:80] + "..." if len(message) > 80 else message)
     
-    def update_status(self, status, color="gray"):
-        """Update the status indicator and label."""
-        self.status_label.config(text=status)
-        self.status_indicator.delete("all")
-        # Get background color to match frame
-        bg_color = self.status_indicator.cget("bg")
-        self.status_indicator.create_oval(
-            2, 2, 18, 18,
-            fill=color,
-            outline="black",
-            width=2
-        )
-    
-    def check_server_status(self):
-        """Check if the server is running."""
-        if requests is None:
-            # If requests is not available, just check if process exists
-            if self.server_process is not None and self.server_process.poll() is None:
-                self.is_running = True
-                self.update_status("Server is Running", "green")
-                self.start_button.config(state=tk.DISABLED)
-                self.stop_button.config(state=tk.NORMAL)
-                self.browser_button.config(state=tk.NORMAL)
-                return True
-            else:
-                self.is_running = False
-                if self.server_process is None:
-                    self.update_status("Server is Stopped", "red")
-                else:
-                    self.update_status("Server is Starting...", "yellow")
-                self.start_button.config(state=tk.NORMAL)
-                self.stop_button.config(state=tk.DISABLED)
-                if not self.is_running:
-                    self.browser_button.config(state=tk.DISABLED)
-                return False
-        
+    def check_port(self, port=5000, timeout=0.3):
+        """Fast socket check if port is open (something is listening)."""
         try:
-            response = requests.get("http://localhost:5000", timeout=1)
-            if response.status_code == 200:
-                self.is_running = True
-                self.update_status("Server is Running", "green")
-                self.start_button.config(state=tk.DISABLED)
-                self.stop_button.config(state=tk.NORMAL)
-                self.browser_button.config(state=tk.NORMAL)
-                return True
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex(("localhost", port))
+            try:
+                sock.close()
+            except Exception:
+                pass
+            return result == 0
         except Exception:
-            self.is_running = False
-            if self.server_process is None:
-                self.update_status("Server is Stopped", "red")
-            else:
-                self.update_status("Server is Starting...", "yellow")
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            if not self.is_running:
-                self.browser_button.config(state=tk.DISABLED)
             return False
     
-    def auto_check_status(self):
-        """Automatically check server status periodically."""
-        self.check_server_status()
-        self.root.after(2000, self.auto_check_status)  # Check every 2 seconds
+    def _port_closed(self, port=5000, retries=5, delay=0.5):
+        """Return True if port has no listener. Retries to allow OS to release port."""
+        for _ in range(retries):
+            if not self.check_port(port, timeout=0.5):
+                return True
+            time.sleep(delay)
+        return False
     
-    def start_server(self):
-        """Start the Flask server."""
-        if self.server_process is not None:
-            messagebox.showinfo("Info", "Server is already starting or running.")
+    def check_status(self):
+        """Check server status (non-blocking, efficient)."""
+        if self._checking:
+            self.root.after(3000, self.check_status)
             return
         
-        # Check if app.py exists
-        script_dir = Path(__file__).parent
-        app_file = script_dir / "app.py"
+        self._checking = True
+        
+        def check():
+            port_open = self.check_port()
+            
+            # Check managed process (local ref to avoid NoneType if cleared by another thread)
+            proc = self.server_process
+            process_running = (proc is not None and proc.poll() is None)
+            
+            if port_open or process_running:
+                if not self.is_running:
+                    self.is_running = True
+                    self.root.after(0, self._update_ui_running)
+            else:
+                if self.is_running:
+                    self.is_running = False
+                    self.root.after(0, self._update_ui_stopped)
+            
+            self._checking = False
+            self.root.after(3000, self.check_status)
+        
+        threading.Thread(target=check, daemon=True).start()
+    
+    def _update_ui_running(self):
+        """Update UI when server is running."""
+        self.update_status("Running", "green")
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.restart_btn.config(state=tk.NORMAL)
+        self.browser_btn.config(state=tk.NORMAL)
+    
+    def _update_ui_stopped(self):
+        """Update UI when server is stopped."""
+        self.update_status("Stopped", "red")
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+        self.restart_btn.config(state=tk.DISABLED)
+        self.browser_btn.config(state=tk.DISABLED)
+    
+    def start_server(self):
+        """Start the server."""
+        if self.server_process is not None:
+            messagebox.showinfo("Info", "Server is already running.")
+            return
+        
+        app_file = self.script_dir / "app.py"
         if not app_file.exists():
-            messagebox.showerror("Error", f"Cannot find app.py in:\n{script_dir}\n\nPlease make sure you're running this from the project directory.")
+            messagebox.showerror("Error", f"Cannot find app.py in:\n{self.script_dir}")
             return
         
         self.log("Starting server...")
-        self.update_status("Starting Server...", "yellow")
-        self.start_button.config(state=tk.DISABLED)
+        self.update_status("Starting...", "yellow")
+        self.start_btn.config(state=tk.DISABLED)
         
-        # Start server in a separate thread
-        def run_server():
+        def run():
             try:
-                # Change to project directory
-                os.chdir(script_dir)
-                
-                # Start Flask server
-                self.server_process = subprocess.Popen(
+                os.chdir(self.script_dir)
+                proc = subprocess.Popen(
                     [sys.executable, "app.py"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    universal_newlines=True,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 )
+                self.server_process = proc
+                self.root.after(0, lambda: self.log("Server starting..."))
                 
-                self.root.after(0, self.log, "Server process started. Waiting for initialization...")
-                
-                # Read output in real-time
-                for line in iter(self.server_process.stdout.readline, ''):
-                    if line:
-                        self.root.after(0, self.log, line.strip())
-                    
-                    # Check if process ended
-                    if self.server_process.poll() is not None:
+                # Read output (minimal, just to keep pipe from blocking); use proc so stop() can set server_process=None
+                for line in iter(proc.stdout.readline, ''):
+                    if proc.poll() is not None:
                         break
                 
-                # Process ended
-                if self.server_process.poll() is not None:
-                    return_code = self.server_process.returncode
-                    self.root.after(0, self.log, f"Server process ended with code {return_code}")
-                    self.root.after(0, lambda: self.update_status("Server Stopped", "red"))
-                    self.server_process = None
-                    self.is_running = False
-                    self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
-                    self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
-                    if return_code != 0:
-                        self.root.after(0, lambda: messagebox.showerror("Error", "Server stopped unexpectedly. Check the logs for details."))
-                    
-            except Exception as e:
-                error_msg = f"Error starting server: {str(e)}"
-                self.root.after(0, self.log, error_msg)
-                self.root.after(0, lambda: self.update_status("Error", "red"))
-                self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
+                if proc.poll() is not None:
+                    self.root.after(0, lambda: self.log(f"Server stopped (code {proc.returncode})"))
                 self.server_process = None
-                self.root.after(0, lambda: self.start_button.config(state=tk.NORMAL))
+            except Exception as e:
+                self.root.after(0, lambda: self.log(f"Error: {str(e)}"))
+                self.server_process = None
+                self.root.after(0, lambda: self.start_btn.config(state=tk.NORMAL))
         
-        # Start server in background thread
-        server_thread = threading.Thread(target=run_server, daemon=True)
-        server_thread.start()
+        threading.Thread(target=run, daemon=True).start()
     
-    def stop_server(self):
-        """Stop the Flask server."""
-        self.log("Stopping server...")
-        self.update_status("Stopping Server...", "yellow")
-        self.stop_button.config(state=tk.DISABLED)
-        
-        # Stop our managed process
-        if self.server_process is not None:
-            try:
-                # Terminate the process
-                self.server_process.terminate()
-                
-                # Wait a bit for graceful shutdown
-                try:
-                    self.server_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    # Force kill if it doesn't terminate
-                    self.server_process.kill()
-                    self.server_process.wait()
-                
-                self.log("Server process stopped.")
-            except Exception as e:
-                self.log(f"Error stopping server process: {str(e)}")
-                # Try to kill it anyway
-                try:
-                    if self.server_process:
-                        self.server_process.kill()
-                except:
-                    pass
-            finally:
-                self.server_process = None
-        
-        # Also try to kill any other Python processes on port 5000
+    def _clear_port_5000(self):
+        """Kill all processes using port 5000 (any state: LISTENING, ESTABLISHED, etc.)."""
+        flags = subprocess.CREATE_NO_WINDOW if (sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW")) else 0
+        my_pid = os.getpid()
+        pids_to_kill = set()
         try:
             if sys.platform == "win32":
-                # Windows: Find and kill processes using port 5000
-                import subprocess as sp
+                result = subprocess.run(
+                    ["netstat", "-ano"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    creationflags=flags,
+                )
+                # Match any line with :5000 (LISTENING, ESTABLISHED, TIME_WAIT, etc.)
+                for line in (result.stdout or "").split("\n"):
+                    if ":5000" not in line:
+                        continue
+                    parts = line.strip().split()
+                    # PID is last column; ensure it's numeric
+                    if len(parts) >= 5 and parts[-1].isdigit():
+                        pid = int(parts[-1])
+                        if pid != my_pid:
+                            pids_to_kill.add(pid)
+                for pid in pids_to_kill:
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", str(pid)],
+                            capture_output=True,
+                            timeout=3,
+                            creationflags=flags,
+                        )
+                    except Exception:
+                        pass
+            else:
+                result = subprocess.run(
+                    ["lsof", "-ti:5000"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    for pid in result.stdout.strip().split("\n"):
+                        pid = pid.strip()
+                        if pid.isdigit() and int(pid) != my_pid:
+                            try:
+                                subprocess.run(["kill", "-9", pid], capture_output=True, timeout=2)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+    
+    def _run_stop_script(self):
+        """Run stop_server.bat on Windows (then port is always cleared via _clear_port_5000)."""
+        if sys.platform == "win32":
+            stop_bat = self.script_dir / "stop_server.bat"
+            if stop_bat.exists():
                 try:
-                    # Find PID using port 5000
-                    result = sp.run(
-                        ['netstat', '-ano'],
-                        capture_output=True,
-                        text=True,
-                        timeout=2
+                    subprocess.run(
+                        [str(stop_bat)],
+                        cwd=str(self.script_dir),
+                        shell=True,
+                        timeout=15,
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
                     )
-                    for line in result.stdout.split('\n'):
-                        if ':5000' in line and 'LISTENING' in line:
-                            parts = line.split()
-                            if len(parts) > 4:
-                                pid = parts[-1]
-                                try:
-                                    sp.run(['taskkill', '/F', '/PID', pid], 
-                                          capture_output=True, timeout=1)
-                                    self.log(f"Killed process on port 5000 (PID: {pid})")
-                                except:
-                                    pass
-                except:
-                    pass
-        except Exception as e:
-            self.log(f"Error clearing port 5000: {str(e)}")
+                except Exception as e:
+                    self.root.after(0, lambda: self.log(f"Stop script: {str(e)}"))
+        self.server_process = None
+    
+    def stop_server(self):
+        """Stop the server and clear port 5000 (script + explicit clear)."""
+        self.log("Stopping server...")
+        self.update_status("Stopping...", "yellow")
+        self.stop_btn.config(state=tk.DISABLED)
+        self.restart_btn.config(state=tk.DISABLED)
         
-        self.log("Server stopped successfully.")
-        self.is_running = False
-        self.update_status("Server is Stopped", "red")
-        self.start_button.config(state=tk.NORMAL)
-        self.browser_button.config(state=tk.DISABLED)
+        def stop():
+            # 1) Terminate our managed process if any (local ref to avoid race with run() thread)
+            proc = self.server_process
+            self.server_process = None
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        if proc.poll() is None:
+                            proc.kill()
+                    except Exception:
+                        pass
+            # 2) Run stop script (Windows)
+            self._run_stop_script()
+            # 3) Clear port 5000 (run twice to catch slow-to-exit processes)
+            self._clear_port_5000()
+            time.sleep(1.0)
+            self._clear_port_5000()
+            time.sleep(1.2)
+            # 4) Verify with retries (OS may need a moment to release the port)
+            if self._port_closed(5000, retries=5, delay=0.5):
+                self.root.after(0, lambda: self.log("Server stopped"))
+                self.root.after(0, self._update_ui_stopped)
+            else:
+                self.root.after(0, lambda: self.log("Port 5000 may still be in use"))
+                self.root.after(0, self._update_ui_stopped)
+        
+        threading.Thread(target=stop, daemon=True).start()
+    
+    def restart_server(self):
+        """Restart the server using restart_server script (or stop + start)."""
+        if sys.platform == "win32":
+            restart_bat = self.script_dir / "restart_server.bat"
+            if restart_bat.exists():
+                self.log("Running restart script...")
+                self.update_status("Restarting...", "yellow")
+                self.stop_btn.config(state=tk.DISABLED)
+                self.restart_btn.config(state=tk.DISABLED)
+                self.server_process = None
+                # Run script in background (batch has 'pause' so we don't wait); server starts in new window
+                try:
+                    subprocess.Popen(
+                        [str(restart_bat)],
+                        cwd=str(self.script_dir),
+                        shell=True,
+                    )
+                except Exception as e:
+                    self.root.after(0, lambda: self.log(f"Restart script error: {str(e)}"))
+                    self.root.after(0, self._update_ui_stopped)
+                    return
+                self.root.after(0, lambda: self.log("Restart script started (check console)"))
+                return
+        
+        # Non-Windows or script missing: stop (clear port) then start
+        if not self.is_running:
+            messagebox.showinfo("Info", "Server is not running.")
+            return
+        
+        def restart():
+            proc = self.server_process
+            self.server_process = None
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            self._clear_port_5000()
+            time.sleep(1.2)
+            self.root.after(0, self.start_server)
+        
+        threading.Thread(target=restart, daemon=True).start()
     
     def open_browser(self):
-        """Open the application in the default web browser."""
+        """Open browser."""
         if not self.is_running:
-            messagebox.showwarning("Warning", "Server is not running. Please start the server first.")
+            messagebox.showwarning("Warning", "Server is not running.")
             return
         
         import webbrowser
-        url = "http://localhost:5000"
-        self.log(f"Opening browser: {url}")
         try:
-            webbrowser.open(url)
+            webbrowser.open("http://localhost:5000")
+            self.log("Opening browser...")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open browser: {str(e)}")
     
     def on_closing(self):
-        """Handle window closing event."""
-        if self.server_process is not None:
-            self.log("Stopping server before exit...")
+        """Handle window close."""
+        proc = self.server_process
+        if proc is not None:
             self.stop_server()
-            time.sleep(1)  # Give it a moment to stop
+            time.sleep(0.5)
         self.root.destroy()
 
 
 def main():
     """Main entry point."""
     try:
-        # Test if tkinter is available
         root = tk.Tk()
-        
-        # Set up error handling
-        def handle_exception(exc_type, exc_value, exc_traceback):
-            """Handle uncaught exceptions."""
-            import traceback
-            error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-            print(f"Uncaught exception:\n{error_msg}")
-            try:
-                messagebox.showerror(
-                    "Error",
-                    f"An error occurred:\n\n{str(exc_value)}\n\nCheck console for details."
-                )
-            except:
-                pass
-        
-        sys.excepthook = handle_exception
-        
-        # Create and run the application
-        app = ProjectLauncher(root)
+        app = LightweightLauncher(root)
         root.protocol("WM_DELETE_WINDOW", app.on_closing)
         root.mainloop()
-        
-    except ImportError as e:
-        print(f"Import Error: {e}")
-        print("\nTkinter may not be installed. Please install it:")
-        print("  Windows: Usually included with Python")
-        print("  Linux: sudo apt-get install python3-tk")
-        print("  Mac: Usually included with Python")
-        input("\nPress Enter to exit...")
     except Exception as e:
-        print(f"Error starting GUI launcher: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
         input("\nPress Enter to exit...")
