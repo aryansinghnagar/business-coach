@@ -37,22 +37,35 @@ var AZURE_GROUPS = [
 ];
 
 function getColorForScore(score) {
-    if (score <= 50) {
-        var r = 255, g = Math.round(255 * (score / 50)), b = 0;
+    if (score <= 30) {
+        var t = score / 30;
+        var r = Math.round(239 * (1 - t) + 167 * t);
+        var g = Math.round(68 * (1 - t) + 139 * t);
+        var b = Math.round(68 * (1 - t) + 250 * t);
         return 'rgb(' + r + ',' + g + ',' + b + ')';
     }
-    var r = Math.round(255 * (1 - (score - 50) / 50)), g = 255, b = 0;
+    if (score <= 70) {
+        var t = (score - 30) / 40;
+        var r = Math.round(167 + (34 - 167) * t);
+        var g = Math.round(139 + (197 - 139) * t);
+        var b = Math.round(250 + (94 - 250) * t);
+        return 'rgb(' + r + ',' + g + ',' + b + ')';
+    }
+    var t = (score - 70) / 30;
+    var r = Math.round(34 + (16 - 34) * t);
+    var g = Math.round(197 + (185 - 197) * t);
+    var b = Math.round(94 + (129 - 94) * t);
     return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
 
-var AZURE_EMA_ALPHA = 0.32;
+/** Real-time metric display (no smoothing). */
 
 class AzureMetricsPanel {
     constructor(options) {
         this.containerId = options.containerId || 'azureMetricsPanelContainer';
         this.container = null;
         this.rows = {};
-        this.smoothedValues = {};
+        this.rawValues = {};
     }
 
     init() {
@@ -133,17 +146,11 @@ class AzureMetricsPanel {
             var num = (typeof v === 'number' && isFinite(v)) ? v : (typeof v === 'string' ? parseFloat(v) : NaN);
             var raw = (!isNaN(num)) ? Math.max(0, Math.min(100, num)) : null;
             if (raw !== null) {
-                var prev = this.smoothedValues[key];
-                var smoothed = (prev != null)
-                    ? AZURE_EMA_ALPHA * raw + (1 - AZURE_EMA_ALPHA) * prev
-                    : raw;
-                this.smoothedValues[key] = smoothed;
-                var display = Math.max(0, Math.min(100, smoothed));
+                var display = Math.max(0, Math.min(100, raw));
                 r.fill.style.width = display + '%';
                 r.fill.style.background = getColorForScore(display);
                 r.value.textContent = Math.round(display);
             } else {
-                this.smoothedValues[key] = undefined;
                 r.fill.style.width = '0%';
                 r.value.textContent = '--';
             }
@@ -151,7 +158,7 @@ class AzureMetricsPanel {
     }
 
     reset() {
-        this.smoothedValues = {};
+        this.rawValues = {};
         for (var key in this.rows) {
             var r = this.rows[key];
             r.fill.style.width = '0%';

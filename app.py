@@ -1,22 +1,10 @@
 """
-Business Meeting Copilot - Main Application
+Business Meeting Copilot — Flask application entry point.
 
-A Flask-based application that provides an AI-powered business coaching assistant
-with speech recognition, text-to-speech, talking avatar, and engagement detection.
-
-Features:
-- Real-time chat with Azure OpenAI (GPT-4)
-- Speech-to-text and text-to-speech via Azure Speech Service
-- Talking avatar with WebRTC support and lip-sync
-- Real-time engagement state detection from video feeds
-- Optional Azure Cognitive Search integration (On Your Data)
-- Streaming responses for real-time interaction
-
-Usage:
-    python app.py
-
-The application will start on http://localhost:5000 by default.
-Configuration can be modified in config.py or via environment variables.
+AI meeting coach with Azure OpenAI chat, Speech (STT/TTS), talking avatar,
+and real-time engagement detection (video + optional partner audio). Run with
+`python app.py`; default http://localhost:5000. Config: config.py or env.
+See docs/DOCUMENTATION.md for full documentation.
 """
 
 from flask import Flask

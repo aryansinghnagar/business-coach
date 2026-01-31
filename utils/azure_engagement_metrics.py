@@ -2,8 +2,11 @@
 Azure Engagement Metrics Module
 
 Computes engagement metrics and B2B-relevant composite features from Azure Face API
-output: 27 landmarks + emotion detection (anger, contempt, disgust, fear, happiness,
-neutral, sadness, surprise). Used only when detection method is Azure Face API.
+emotions. Psychology-informed mappings (Ekman-based, with nuanced combinations):
+- Contempt: one-sided lip raise; skepticism/resistance (validated cross-culturally).
+- Happiness + low contempt: receptive; contempt + low happiness: skeptical.
+- Neutral + low reactivity: disengaged (flat affect).
+- Surprise + happiness: interested/curious; fear + sadness: concerned.
 """
 
 from typing import Dict, Optional, Any
@@ -11,27 +14,25 @@ import numpy as np
 from utils.face_detection_interface import FaceDetectionResult
 
 
-# Azure Face API emotion keys (0-1 each)
 EMOTION_KEYS = [
     "anger", "contempt", "disgust", "fear",
     "happiness", "neutral", "sadness", "surprise"
 ]
 
-# B2B composite feature definitions: (name, formula weights or description)
-# Each composite is 0-100. Formula: weighted sum of emotion scores (0-1) then * 100, clamped.
+# B2B composites: weighted sums of emotion scores (0-1) -> 0-100
+# Positive: receptive, focused, interested, agreeable, open
+# Negative: skeptical (contempt), concerned (fear+sadness), disagreeing, stressed, disengaged
 COMPOSITE_DEFINITIONS = {
-    # Positive for engagement
-    "receptive": {"happiness": 0.45, "contempt": -0.25, "anger": -0.30},  # high happy, low contempt/anger
-    "focused": {"neutral": 0.55, "fear": -0.25, "disgust": -0.20},       # attentive, calm
-    "interested": {"surprise": 0.50, "happiness": 0.50},                  # curious, positive
-    "agreeable": {"happiness": 0.50, "contempt": -0.25, "disgust": -0.25},
-    "open": {"happiness": 0.40, "surprise": 0.40, "contempt": -0.20},
-    # Negative for engagement (resistance / discomfort)
-    "skeptical": {"contempt": 0.55, "happiness": -0.45},
-    "concerned": {"fear": 0.50, "sadness": 0.50},
-    "disagreeing": {"contempt": 0.50, "anger": 0.50},
-    "stressed": {"fear": 0.50, "anger": 0.50},
-    "disengaged": {"neutral": 0.50, "happiness": -0.25, "surprise": -0.25},  # flat, not reacting
+    "receptive": {"happiness": 0.50, "contempt": -0.28, "anger": -0.28},
+    "focused": {"neutral": 0.52, "fear": -0.24, "disgust": -0.22},
+    "interested": {"surprise": 0.48, "happiness": 0.48},
+    "agreeable": {"happiness": 0.52, "contempt": -0.26, "disgust": -0.24},
+    "open": {"happiness": 0.42, "surprise": 0.42, "contempt": -0.22},
+    "skeptical": {"contempt": 0.58, "happiness": -0.42},
+    "concerned": {"fear": 0.48, "sadness": 0.48},
+    "disagreeing": {"contempt": 0.48, "anger": 0.48},
+    "stressed": {"fear": 0.48, "anger": 0.48},
+    "disengaged": {"neutral": 0.55, "happiness": -0.24, "surprise": -0.24},
 }
 
 
@@ -99,15 +100,60 @@ def compute_azure_engagement_score(
     if composite_metrics is None:
         composite_metrics = compute_composite_metrics(face_result)
 
-    # Weights for overall score: positive composites add, negative subtract
-    positive_composites = ["receptive", "focused", "interested", "agreeable", "open"]
-    negative_composites = ["skeptical", "concerned", "disagreeing", "stressed", "disengaged"]
-
-    pos_sum = sum(composite_metrics.get(k, 0.0) for k in positive_composites) / len(positive_composites)
-    neg_sum = sum(composite_metrics.get(k, 0.0) for k in negative_composites) / len(negative_composites)
-    # 0 = no engagement, 100 = high; raw = pos - neg so all zeros -> 0
+    pos_sum = sum(composite_metrics.get(k, 0.0) for k in POSITIVE_COMPOSITES) / len(POSITIVE_COMPOSITES)
+    neg_sum = sum(composite_metrics.get(k, 0.0) for k in NEGATIVE_COMPOSITES) / len(NEGATIVE_COMPOSITES)
     raw = pos_sum - neg_sum
+    # Spike when positive engagement is high; drop when negative is high
+    if pos_sum > 70.0:
+        raw = min(100.0, raw + 8.0)
+    if neg_sum > 70.0:
+        raw = max(0.0, raw - 12.0)
     return float(np.clip(raw, 0.0, 100.0))
+
+
+# Positive/negative composite names for overall score (must match compute_azure_engagement_score)
+POSITIVE_COMPOSITES = ["receptive", "focused", "interested", "agreeable", "open"]
+NEGATIVE_COMPOSITES = ["skeptical", "concerned", "disagreeing", "stressed", "disengaged"]
+
+
+def get_azure_score_breakdown(
+    face_result: Optional[FaceDetectionResult],
+    base_metrics: Optional[Dict[str, float]] = None,
+    composite_metrics: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """
+    Return a step-by-step breakdown of how the Azure engagement score is calculated.
+    Used for frontend "How is the score calculated?" and transparency.
+    """
+    if base_metrics is None:
+        base_metrics = compute_base_metrics(face_result)
+    if composite_metrics is None:
+        composite_metrics = compute_composite_metrics(face_result)
+
+    pos_avg = sum(composite_metrics.get(k, 0.0) for k in POSITIVE_COMPOSITES) / len(POSITIVE_COMPOSITES)
+    neg_avg = sum(composite_metrics.get(k, 0.0) for k in NEGATIVE_COMPOSITES) / len(NEGATIVE_COMPOSITES)
+    raw = pos_avg - neg_avg
+    adjustments = []
+    if pos_avg > 70.0:
+        raw = min(100.0, raw + 8.0)
+        adjustments.append("pos_avg > 70: +8")
+    if neg_avg > 70.0:
+        raw = max(0.0, raw - 12.0)
+        adjustments.append("neg_avg > 70: -12")
+    score = float(np.clip(raw, 0.0, 100.0))
+
+    return {
+        "formula": "score = clip(pos_avg - neg_avg + adjustments, 0, 100)",
+        "base": base_metrics,
+        "composite": composite_metrics,
+        "positiveComposites": POSITIVE_COMPOSITES,
+        "negativeComposites": NEGATIVE_COMPOSITES,
+        "posAvg": round(pos_avg, 2),
+        "negAvg": round(neg_avg, 2),
+        "rawBeforeAdjustments": round(pos_avg - neg_avg, 2),
+        "adjustments": adjustments if adjustments else ["none"],
+        "score": round(score, 1),
+    }
 
 
 def get_all_azure_metrics(face_result: Optional[FaceDetectionResult]) -> Dict[str, Any]:

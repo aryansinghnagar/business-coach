@@ -1,12 +1,26 @@
 """
-Flask routes module.
+Flask routes for Business Meeting Copilot.
 
-This module contains all Flask route handlers for the Business Meeting Copilot API.
-Routes are organized by functionality: static files, chat, configuration, and speech services.
+Handles static files, chat (streaming + optional engagement/On Your Data), config,
+speech/avatar tokens, engagement start/stop/state/transcript/debug, and weights.
+See docs/DOCUMENTATION.md for API reference.
 """
 
 from flask import Blueprint, request, jsonify, send_from_directory, Response
 from services.azure_openai import openai_service
+from services.insight_generator import (
+    append_transcript,
+    clear_pending_aural_alert,
+    clear_transcript,
+    generate_insight_for_aural_trigger,
+    generate_insight_for_opportunity,
+    generate_insight_for_spike,
+    get_and_clear_pending_aural_alert,
+    get_recent_transcript,
+    _check_for_trigger_phrases,
+    _set_pending_aural_alert,
+)
+from utils.b2b_opportunity_detector import clear_opportunity_state
 from services.azure_speech import speech_service
 from utils.helpers import build_config_response
 from utils.face_detection_preference import get_face_detection_method, set_face_detection_method
@@ -15,6 +29,7 @@ from utils.video_source_handler import set_partner_frame_from_bytes
 from utils.context_generator import ContextGenerator
 from utils import signifier_weights
 from typing import Optional
+import math
 import time
 import config
 
@@ -167,7 +182,7 @@ def chat_stream():
     if not messages:
         return jsonify({"error": "Missing messages"}), 400
     
-    # Automatically include engagement context if available (only when last user message is plain text)
+    # Real-time engagement context (no smoothing) for actionable avatar insights
     if include_engagement and engagement_detector:
         try:
             state = engagement_detector.get_current_state()
@@ -364,7 +379,7 @@ def get_all_config():
 def face_detection_config():
     """
     GET: Face detection configuration. "method" is the active backend (from toggle or config).
-    PUT: Set method. Body: {"method": "mediapipe" | "azure_face_api"}. Only one backend is used at a time.
+    PUT: Set method. Body: {"method": "mediapipe" | "azure_face_api" | "auto" | "unified"}.
     """
     if request.method == "GET":
         cfg = dict(config.get_face_detection_config())
@@ -400,13 +415,16 @@ def get_azure_face_api_config():
 @api.route("/weights/signifiers", methods=["GET", "PUT"])
 def signifier_weights_route():
     """
-    GET: Return current signifier [30] and group [4] weights. Loads from URL/file if not yet loaded.
-    PUT: Update from ML backend. Body: {"signifier": [30 floats], "group": [4 floats]}. Partial update.
+    GET: Return current signifier [30], group [4], and fusion weights. Loads from URL/file if not yet loaded.
+    PUT: Update from ML backend. Body: {"signifier": [30], "group": [4], "fusion": {"azure": float, "mediapipe": float}}. Partial update.
     """
     if request.method == "GET":
         try:
             signifier_weights.load_weights()
-            return jsonify(signifier_weights.get_weights())
+            out = dict(signifier_weights.get_weights())
+            azure_w, mp_w = signifier_weights.get_fusion_weights()
+            out["fusion"] = {"azure": azure_w, "mediapipe": mp_w}
+            return jsonify(out)
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     if request.method == "PUT":
@@ -418,6 +436,13 @@ def signifier_weights_route():
                 signifier=data.get("signifier"),
                 group=data.get("group"),
             )
+            fusion = data.get("fusion")
+            if isinstance(fusion, dict):
+                a, m = fusion.get("azure"), fusion.get("mediapipe")
+                if isinstance(a, (int, float)) and isinstance(m, (int, float)):
+                    signifier_weights.set_fusion_weights(float(a), float(m))
+            azure_w, mp_w = signifier_weights.get_fusion_weights()
+            out["fusion"] = {"azure": azure_w, "mediapipe": mp_w}
             return jsonify(out)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -462,15 +487,15 @@ def start_engagement_detection():
     Request Body:
         {
             "sourceType": "webcam" | "file" | "stream" | "partner",
-            "sourcePath": "optional path for file/stream sources (not used for partner)",
-            "detectionMethod": "mediapipe" | "azure_face_api" (optional, uses config default)
+            "sourcePath": "optional path for file/stream sources (not used for partner)"
         }
+    Detection method is chosen automatically (device + network); no user option.
     
     Returns:
         JSON: {
             "success": true,
             "message": "Detection started",
-            "detectionMethod": "mediapipe" | "azure_face_api"
+            "detectionMethod": resolved method (mediapipe | azure_face_api | unified)
         }
     """
     global engagement_detector
@@ -481,8 +506,8 @@ def start_engagement_detection():
     data = request.get_json(silent=True) or {}
     source_type_str = data.get("sourceType", "webcam").lower()
     source_path = data.get("sourcePath")
-    # Use request override, else runtime preference (toggle), else config default. Only one backend at a time.
-    detection_method = data.get("detectionMethod") or get_face_detection_method()
+    # App always chooses optimal method (auto); no user override
+    detection_method = getattr(config, "FACE_DETECTION_METHOD", "auto").lower() or "auto"
     
     # Map string to enum
     source_type_map = {
@@ -604,6 +629,33 @@ def partner_frame():
         return jsonify({"error": "Failed to process frame", "details": str(e)}), 500
 
 
+@api.route("/engagement/transcript", methods=["POST"])
+def engagement_transcript():
+    """
+    Receive recent speech transcript from the meeting partner's audio (Meeting Partner Video).
+    Used when sourceType is 'partner': frontend runs STT on getDisplayMedia audio
+    and POSTs transcript here. Also checks for B2B-relevant trigger phrases; if found,
+    sets a pending aural alert (returned on next GET /engagement/state).
+    Body: JSON { "text": "..." } or plain text.
+    """
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            text = data.get("text", "") or ""
+        else:
+            text = (request.get_data(as_text=True) or "").strip()
+        if text:
+            append_transcript(text)
+            # Check for phrase-triggered insights (objection, interest, confusion, etc.)
+            match = _check_for_trigger_phrases(text)
+            if match:
+                category, phrase = match
+                _set_pending_aural_alert(category, phrase)
+        return "", 204
+    except Exception as e:
+        return jsonify({"error": "Failed to process transcript", "details": str(e)}), 500
+
+
 @api.route("/engagement/video-feed", methods=["GET"])
 def engagement_video_feed():
     """
@@ -622,6 +674,8 @@ def engagement_video_feed():
 
     def generate():
         while True:
+            if not engagement_detector or not engagement_detector.is_running:
+                break
             jpeg = engagement_detector.get_last_frame_jpeg()
             if jpeg:
                 part = (
@@ -657,7 +711,10 @@ def stop_engagement_detection():
         if engagement_detector:
             engagement_detector.stop_detection()
             engagement_detector = None
-        
+        clear_transcript()
+        clear_pending_aural_alert()
+        clear_opportunity_state()
+
         return jsonify({
             "success": True,
             "message": "Engagement detection stopped"
@@ -692,8 +749,10 @@ def get_engagement_debug():
         
         debug_info = {
             "detector_running": engagement_detector.is_running,
+            "detection_method": getattr(engagement_detector, "detection_method", "unknown"),
             "fps": fps,
             "has_state": state is not None,
+            "consecutive_no_face": getattr(engagement_detector, "consecutive_no_face_frames", None),
         }
         
         if state:
@@ -769,7 +828,10 @@ def get_engagement_state():
                 "level": "UNKNOWN",
                 "faceDetected": False,
                 "confidence": 0.0,
-                "message": "No engagement data available yet"
+                "message": "No engagement data available yet",
+                "detectionMethod": getattr(engagement_detector, "detection_method", None) or "mediapipe",
+                "signifierScores": None,
+                "azureMetrics": None,
             })
         
         # Format context for JSON response
@@ -792,6 +854,20 @@ def get_engagement_state():
             "mouthActivity": state.metrics.mouth_activity
         }
         
+        # Sanitize signifier scores (ensure no NaN/Inf reach frontend)
+        sig_scores = state.signifier_scores
+        if sig_scores and isinstance(sig_scores, dict):
+            clean = {}
+            for k, v in sig_scores.items():
+                try:
+                    f = float(v)
+                    clean[k] = max(0.0, min(100.0, f)) if math.isfinite(f) else 0.0
+                except (TypeError, ValueError):
+                    clean[k] = 0.0
+            sig_scores = clean
+        elif not sig_scores:
+            sig_scores = None
+
         # Return engagement state with all details
         response_data = {
             "score": float(state.score),
@@ -802,13 +878,59 @@ def get_engagement_state():
             "metrics": metrics_dict,
             "context": context_dict,
             "fps": float(engagement_detector.get_fps()),
-            "signifierScores": state.signifier_scores if state.signifier_scores else None,
+            "signifierScores": sig_scores,
             "detectionMethod": state.detection_method if state.detection_method else "mediapipe",
             "azureMetrics": state.azure_metrics if state.azure_metrics else None,
         }
         
-        # Include engagement alert if present (drop / plateau); consumed on first return
+        # Include alert if present (spike or phrase-triggered); consumed on first return.
+        m = response_data.get("metrics") or {}
+        metrics_summary = {
+            "attention": m.get("attention"),
+            "eyeContact": m.get("eyeContact"),
+            "facialExpressiveness": m.get("facialExpressiveness"),
+        }
         alert = engagement_detector.get_and_clear_pending_alert()
+        if alert and alert.get("type") == "spike":
+            try:
+                generated = generate_insight_for_spike(
+                    group=alert.get("group", "g1"),
+                    metrics_summary=metrics_summary,
+                    recent_transcript=get_recent_transcript(),
+                )
+                alert = dict(alert)
+                alert["message"] = (generated or "").strip() or alert.get("message", "Notable change in engagement.")
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Insight generation failed: %s", e)
+        elif alert and alert.get("type") == "opportunity":
+            try:
+                generated = generate_insight_for_opportunity(
+                    opportunity_id=alert.get("opportunity_id", ""),
+                    context=alert.get("context"),
+                    metrics_summary=metrics_summary,
+                    recent_transcript=get_recent_transcript(),
+                )
+                alert = dict(alert)
+                alert["message"] = (generated or "").strip() or alert.get("message", "Opportunity detected—consider acting on it.")
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Opportunity insight generation failed: %s", e)
+        else:
+            # Check for phrase-triggered (aural) alert
+            aural = get_and_clear_pending_aural_alert()
+            if aural and aural.get("type") == "aural":
+                try:
+                    generated = generate_insight_for_aural_trigger(
+                        category=aural.get("category", "interest"),
+                        phrase=aural.get("phrase", ""),
+                        metrics_summary=metrics_summary,
+                    )
+                    alert = {"type": "aural", "message": (generated or "").strip() or "Notable comment—consider responding."}
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning("Aural insight generation failed: %s", e)
+                    alert = {"type": "aural", "message": "They said something noteworthy—consider acknowledging their point."}
         if alert:
             response_data["alert"] = alert
         
@@ -824,6 +946,35 @@ def get_engagement_state():
         return jsonify({
             "error": "Failed to get engagement state",
             "details": str(e)
+        }), 500
+
+
+@api.route("/engagement/score-breakdown", methods=["GET"])
+def get_engagement_score_breakdown():
+    """
+    Get a step-by-step breakdown of how the current engagement score is calculated.
+    Used by the frontend "How is the score calculated?" view.
+    Returns detection method, formula steps, group/composite values, adjustments, and final score.
+    """
+    global engagement_detector
+    if not engagement_detector:
+        return jsonify({
+            "error": "Engagement detection not started",
+            "breakdown": None
+        }), 404
+    try:
+        breakdown = engagement_detector.get_score_breakdown()
+        if breakdown is None:
+            return jsonify({
+                "error": "No engagement data available yet",
+                "breakdown": None
+            }), 404
+        return jsonify(breakdown)
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to get score breakdown",
+            "details": str(e),
+            "breakdown": None
         }), 500
 
 

@@ -103,41 +103,41 @@
             width: 100%;
             max-width: 480px;
             min-width: 320px;
-            background: rgba(15, 23, 42, 0.85);
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.97) 0%, rgba(30, 27, 75, 0.95) 100%);
             backdrop-filter: blur(20px);
-            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            border-right: 1px solid rgba(167, 139, 250, 0.12);
             display: flex;
             flex-direction: column;
             overflow: hidden;
-            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.2);
+            box-shadow: 4px 0 32px rgba(0, 0, 0, 0.25);
         }
         
         .sidebar-header {
             padding: 20px 24px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(102, 126, 234, 0.15);
+            border-bottom: 1px solid rgba(167, 139, 250, 0.15);
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(167, 139, 250, 0.12) 100%);
         }
         
         .sidebar-header h1 {
             font-size: 1.5rem;
             font-weight: 700;
             margin: 0;
-            background: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
+            background: linear-gradient(135deg, #ffffff 0%, #c4b5fd 50%, #e0e7ff 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            letter-spacing: -0.01em;
+            letter-spacing: -0.02em;
         }
         
         .sidebar-header .status-indicator {
             margin-top: 8px;
             padding: 8px 12px;
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.06);
             backdrop-filter: blur(10px);
             border-radius: 8px;
             font-size: 0.8rem;
-            color: rgba(255, 255, 255, 0.85);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: rgba(255, 255, 255, 0.88);
+            border: 1px solid rgba(167, 139, 250, 0.2);
             font-weight: 400;
         }
         
@@ -145,10 +145,10 @@
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
-            padding: 20px;
+            padding: 18px 20px 24px 20px;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 18px;
         }
         
         .sidebar-content::-webkit-scrollbar {
@@ -156,35 +156,68 @@
         }
         
         .sidebar-content::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
         }
         
         .sidebar-content::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(167, 139, 250, 0.35);
             border-radius: 4px;
         }
         
         .sidebar-content::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.3);
+            background: rgba(167, 139, 250, 0.5);
         }
         
         .sidebar-section {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(12px);
+            border-radius: 14px;
             padding: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(167, 139, 250, 0.1);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
         }
         
         .sidebar-section-title {
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: rgba(255, 255, 255, 0.9);
+            letter-spacing: 0.06em;
+            color: rgba(255, 255, 255, 0.92);
             margin-bottom: 12px;
             padding-bottom: 8px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(167, 139, 250, 0.15);
+        }
+        
+        .controls-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(167, 139, 250, 0.15);
+        }
+        .controls-header .sidebar-section-title {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+        .session-status {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 999px;
+            letter-spacing: 0.02em;
+        }
+        .session-status-idle {
+            color: rgba(255, 255, 255, 0.65);
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .session-status-live {
+            color: #22c55e;
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid rgba(34, 197, 94, 0.35);
         }
         
         .button-group {
@@ -327,96 +360,99 @@
             z-index: 999;
         }
         
-        .engagement-bar-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            padding: 12px;
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(10px);
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            min-height: 200px;
-        }
-        
-        .engagement-bar-label {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: rgba(255, 255, 255, 0.8);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 8px;
-        }
-        
-        .engagement-bar-wrapper {
-            position: relative;
-            width: 32px;
-            height: 180px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 16px;
-            overflow: hidden;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .engagement-bar-fill {
-            position: absolute;
-            bottom: 0;
-            width: 100%;
-            height: 0%;
-            /* Color will be set dynamically via JavaScript based on score */
-            background: linear-gradient(180deg, rgba(239, 68, 68, 0.7) 0%, rgba(239, 68, 68, 0.9) 100%);
-            transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s ease;
-            border-radius: 10px;
-            box-shadow: 
-                0 -4px 12px rgba(0, 0, 0, 0.3),
-                inset 0 2px 4px rgba(255, 255, 255, 0.2);
-        }
-        
-        .engagement-bar-value {
-            position: absolute;
-            top: 50%;
+        /* Metric spike toast (popup when a metric group spikes) */
+        .metric-spike-toast {
+            position: fixed;
+            bottom: 24px;
             left: 50%;
-            transform: translate(-50%, -50%) rotate(-90deg);
-            font-size: 1rem;
-            font-weight: 700;
+            transform: translateX(-50%);
+            max-width: 420px;
+            padding: 14px 18px;
+            background: linear-gradient(135deg, rgba(30, 27, 75, 0.98) 0%, rgba(15, 23, 42, 0.98) 100%);
+            border: 1px solid rgba(167, 139, 250, 0.4);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
             color: rgba(255, 255, 255, 0.95);
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-            white-space: nowrap;
-            z-index: 10;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            z-index: 10000;
+            animation: toastIn 0.25s ease;
         }
-        
-        .engagement-level-indicator {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: rgba(255, 255, 255, 0.7);
-            text-align: center;
-            margin-top: 8px;
-            padding: 4px 8px;
-            background: rgba(255, 255, 255, 0.1);
+        .metric-spike-toast.hiding {
+            animation: toastOut 0.2s ease forwards;
+        }
+        /* Insight transcript box: scrollable log of insight responses */
+        .insight-transcript-section {
+            flex: 0 0 auto;
+            max-height: 200px;
+            min-height: 80px;
+        }
+        .insight-transcript-box {
+            font-size: 0.8rem;
+            line-height: 1.35;
+            color: rgba(255, 255, 255, 0.9);
+            background: rgba(0, 0, 0, 0.2);
             border-radius: 8px;
-            min-height: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            padding: 10px 12px;
+            max-height: 160px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .insight-transcript-box::-webkit-scrollbar {
+            width: 6px;
+        }
+        .insight-transcript-box::-webkit-scrollbar-thumb {
+            background: rgba(167, 139, 250, 0.35);
+            border-radius: 3px;
+        }
+        .insight-entry {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(167, 139, 250, 0.15);
+        }
+        .insight-entry:last-child { border-bottom: none; margin-bottom: 0; }
+        .insight-entry .insight-time { color: rgba(255, 255, 255, 0.55); font-size: 0.7rem; }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        @keyframes toastOut {
+            from { opacity: 1; transform: translateX(-50%) translateY(0); }
+            to { opacity: 0; transform: translateX(-50%) translateY(-8px); }
         }
 
-        /* 30 Signifier Metrics Panel (in sidebar) */
+        /* Engagement Metrics Panel (MediaPipe 30 signifiers or Azure emotions + composites) */
         .sidebar-section.engagement-signifiers-panel {
-            flex: 0 1 auto;
-            min-height: 200px;
-            max-height: 420px;
+            flex: 0 0 auto;
+            height: 380px;
+            min-height: 280px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
             padding: 0;
         }
-        .sidebar-section.engagement-signifiers-panel .sidebar-section-title {
-            padding: 16px 16px 8px 16px;
+        .engagement-metrics-hint {
+            flex: 0 0 auto;
+            font-size: 0.75rem;
+            color: rgba(167, 139, 250, 0.9);
+            padding: 6px 16px 8px 16px;
+            background: rgba(167, 139, 250, 0.08);
+        }
+        .sidebar-section.engagement-signifiers-panel .engagement-metrics-title {
+            flex: 0 0 auto;
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: rgba(255, 255, 255, 0.95);
+            padding: 14px 16px 10px 16px;
             margin: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.03);
         }
         #signifierPanelContainer,
-        #azureMetricsPanelContainer {
+        #azureMetricsPanelContainer.metrics-panel-container {
             flex: 1;
             min-height: 0;
             overflow: hidden;
@@ -426,20 +462,25 @@
         .signifier-panel-inner {
             display: flex;
             flex-direction: column;
-            height: 100%;
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
-            padding: 0 16px 16px 16px;
+            padding: 12px 16px 16px 16px;
+        }
+        .azure-metrics-panel-inner {
+            padding: 12px 16px 16px 16px;
         }
         .signifier-panel-header {
-            font-size: 0.8rem;
-            font-weight: 700;
-            color: rgba(255, 255, 255, 0.95);
-            margin-bottom: 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 10px;
             letter-spacing: 0.02em;
-            display: none; /* Hide for MediaPipe panel (sidebar-section-title used) */
+            display: none;
         }
         .azure-metrics-panel-inner .signifier-panel-header {
-            display: block; /* Show for Azure panel so title is visible */
+            display: block;
+            color: rgba(167, 139, 250, 0.95);
         }
         .signifier-panel-groups {
             flex: 1;
@@ -448,73 +489,78 @@
             overflow-x: hidden;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 14px;
         }
         .signifier-panel-groups::-webkit-scrollbar {
             width: 6px;
         }
         .signifier-panel-groups::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-        }
-        .signifier-panel-groups::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.04);
             border-radius: 3px;
         }
+        .signifier-panel-groups::-webkit-scrollbar-thumb {
+            background: rgba(167, 139, 250, 0.35);
+            border-radius: 3px;
+        }
+        .signifier-panel-groups::-webkit-scrollbar-thumb:hover {
+            background: rgba(167, 139, 250, 0.5);
+        }
         .signifier-group {
-            background: rgba(15, 23, 42, 0.4);
-            border-radius: 8px;
-            padding: 10px 12px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(135deg, rgba(30, 27, 75, 0.5) 0%, rgba(15, 23, 42, 0.6) 100%);
+            border-radius: 10px;
+            padding: 12px 14px;
+            border: 1px solid rgba(167, 139, 250, 0.15);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
         }
         .signifier-group-title {
-            font-size: 0.75rem;
+            font-size: 0.72rem;
             font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: rgba(255, 255, 255, 0.85);
+            letter-spacing: 0.06em;
+            color: rgba(167, 139, 250, 0.9);
             margin-bottom: 8px;
             padding-bottom: 6px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            border-bottom: 1px solid rgba(167, 139, 250, 0.2);
         }
         .signifier-list {
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 6px;
         }
         .signifier-row {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
             font-size: 0.75rem;
         }
         .signifier-label {
-            flex: 0 0 120px;
-            color: rgba(255, 255, 255, 0.9);
+            flex: 0 0 115px;
+            color: rgba(255, 255, 255, 0.92);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
         .signifier-bar {
             flex: 1;
-            min-width: 40px;
-            height: 5px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 3px;
+            min-width: 48px;
+            height: 6px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 4px;
             overflow: hidden;
         }
         .signifier-bar-fill {
             height: 100%;
             width: 0%;
-            border-radius: 3px;
+            border-radius: 4px;
             transition: width 0.35s ease-out, background 0.25s ease;
         }
         .signifier-value {
-            flex: 0 0 32px;
+            flex: 0 0 36px;
             text-align: right;
             font-weight: 600;
-            color: rgba(255, 255, 255, 0.95);
+            color: rgba(255, 255, 255, 0.98);
             font-variant-numeric: tabular-nums;
-            font-size: 0.7rem;
+            font-size: 0.75rem;
         }
         
         /* Video Source Selector Modal Styles */
@@ -690,74 +736,6 @@
             color: rgba(255, 255, 255, 0.5);
         }
         
-        .face-detection-method-selector {
-            margin-top: 24px;
-            padding-top: 24px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .face-detection-method-selector label {
-            display: block;
-            margin-bottom: 12px;
-            font-weight: 600;
-            color: #fff;
-        }
-        
-        .face-detection-method-option {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            cursor: pointer;
-            padding: 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            transition: all 0.2s ease;
-            margin-bottom: 12px;
-        }
-        
-        .face-detection-method-option:hover:not(:has(input:disabled)) {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(99, 102, 241, 0.5);
-        }
-        
-        .face-detection-method-option:has(input:checked) {
-            background: rgba(99, 102, 241, 0.15);
-            border-color: rgba(99, 102, 241, 0.7);
-        }
-        
-        .face-detection-method-option:has(input:disabled) {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .face-detection-method-option input[type="radio"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-            accent-color: #6366f1;
-            flex-shrink: 0;
-        }
-        
-        .face-detection-method-option input[type="radio"]:disabled {
-            cursor: not-allowed;
-        }
-        
-        .face-detection-method-info {
-            flex: 1;
-        }
-        
-        .face-detection-method-title {
-            font-weight: 500;
-            color: #fff;
-            margin-bottom: 4px;
-        }
-        
-        .face-detection-method-description {
-            font-size: 0.85rem;
-            color: rgba(255, 255, 255, 0.7);
-        }
-        
         .video-source-modal-footer {
             display: flex;
             gap: 12px;
@@ -877,162 +855,6 @@
             transition: opacity 0.3s ease;
         }
         
-        /* Chat section in sidebar */
-        .chat-transcription-section {
-            display: flex;
-            flex-direction: column;
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-        
-        .chat-transcription-header {
-            background: rgba(255, 255, 255, 0.08);
-            backdrop-filter: blur(10px);
-            padding: 12px 16px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            color: rgba(255, 255, 255, 0.95);
-            font-weight: 600;
-            font-size: 0.85rem;
-            letter-spacing: 0.01em;
-            text-transform: uppercase;
-        }
-        
-        #chatHistory {
-            flex: 1;
-            border: none;
-            border-radius: 0;
-            resize: none;
-            background-color: rgba(15, 23, 42, 0.3);
-            backdrop-filter: blur(10px);
-            overflow-y: auto;
-            overflow-x: hidden;
-            color: rgba(255, 255, 255, 0.95);
-            padding: 16px;
-            font-size: 0.85rem;
-            line-height: 1.6;
-            font-family: 'Inter', sans-serif;
-            transition: background-color 0.3s ease;
-            min-height: 150px;
-        }
-        
-        #chatHistory:focus {
-            background-color: rgba(15, 23, 42, 0.5);
-            outline: none;
-        }
-        
-        #chatHistory::-webkit-scrollbar {
-            width: 10px;
-        }
-        
-        #chatHistory::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-        }
-        
-        #chatHistory::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 10px;
-            border: 2px solid rgba(255, 255, 255, 0.05);
-        }
-        
-        #chatHistory::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.3);
-        }
-        
-        #chatHistory:empty::before {
-            content: "Chat conversation will appear here...";
-            color: rgba(255, 255, 255, 0.4);
-            font-style: italic;
-            font-weight: 400;
-        }
-        
-        .message-input-container {
-            padding-top: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .message-input-wrapper {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 10px;
-            padding: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-        
-        .message-input-wrapper:focus-within {
-            border-color: rgba(102, 126, 234, 0.6);
-            box-shadow: 
-                0 0 0 4px rgba(102, 126, 234, 0.15),
-                0 6px 24px rgba(0, 0, 0, 0.15);
-            background: rgba(255, 255, 255, 0.12);
-            transform: translateY(-1px);
-        }
-        
-        #userMessageInput {
-            flex: 1;
-            padding: 14px 18px;
-            border-radius: 12px;
-            border: none;
-            background: transparent;
-            color: rgba(255, 255, 255, 0.95);
-            font-family: 'Inter', sans-serif;
-            font-size: 1rem;
-            font-weight: 400;
-        }
-        
-        #userMessageInput::placeholder {
-            color: rgba(255, 255, 255, 0.4);
-        }
-        
-        #userMessageInput:focus {
-            outline: none;
-        }
-        
-        #userMessageInput:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        #sendMessageBtn {
-            padding: 14px 24px;
-            border-radius: 12px;
-            border: none;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.95rem;
-            font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            white-space: nowrap;
-            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
-        }
-        
-        #sendMessageBtn:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
-        }
-        
-        #sendMessageBtn:active:not(:disabled) {
-            transform: translateY(0);
-        }
-        
-        #sendMessageBtn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            box-shadow: none;
-            transform: none;
-        }
-        
         /* Smooth animations */
         @keyframes fadeIn {
             from {
@@ -1134,11 +956,6 @@
                 font-size: 0.9rem;
             }
             
-            .engagement-bar-wrapper {
-                height: 120px;
-                width: 28px;
-            }
-            
             .signifier-label {
                 flex: 0 0 100px;
             }
@@ -1195,29 +1012,24 @@
             <div class="sidebar-content">
                 <!-- Controls Section -->
                 <div class="sidebar-section">
-                    <div class="sidebar-section-title">Controls</div>
+                    <div class="controls-header">
+                        <span class="sidebar-section-title">Controls</span>
+                        <span id="sessionStatusIndicator" class="session-status session-status-idle" aria-live="polite" title="Insights session status">● Idle</span>
+                    </div>
                     <div class="button-group">
-                        <button id="initAvatar" onclick="initializeAvatarSession()">Initialize Avatar Session</button>
+                        <button id="initAvatar" onclick="initializeInsightsSession()">Start Insights Session</button>
                         <button id="selectVideoSource" onclick="promptVideoSourceSelection(true)" class="secondary" style="display: none;">Change Video Source</button>
                         <button id="stopPartnerSharing" onclick="stopPartnerSharing()" class="secondary" style="display: none;" title="Stop sharing your screen/tab for Meeting Partner Video">Stop sharing</button>
                         <button id="microphone" onclick="microphone()" disabled>Start Microphone</button>
                         <button id="stopSpeaking" onclick="stopSpeaking()" disabled>Stop Speaking</button>
-                        <button id="clearChatHistory" onclick="clearChatHistory()" class="secondary">Clear Chat History</button>
-                        <button id="stopSession" onclick="stopSession()" disabled class="danger">Close Avatar Session</button>
+                        <button id="stopSession" onclick="stopSession()" disabled class="danger">Close Insights Session</button>
                     </div>
                 </div>
                 
-                <!-- Engagement Bar Section -->
-                <div class="sidebar-section">
-                    <div class="sidebar-section-title">Engagement Score</div>
-                    <div class="engagement-bar-container">
-                        <div class="engagement-bar-label">Engagement</div>
-                        <div class="engagement-bar-wrapper">
-                            <div class="engagement-bar-fill" id="engagementBarFill"></div>
-                            <div class="engagement-bar-value" id="engagementBarValue">--</div>
-                        </div>
-                        <div class="engagement-level-indicator" id="engagementLevel">--</div>
-                    </div>
+                <!-- Insight Transcript: responses from audiovisual cues (popup + TTS); verify logic here -->
+                <div class="sidebar-section insight-transcript-section">
+                    <div class="sidebar-section-title">Insight Transcript</div>
+                    <div id="insightTranscript" class="insight-transcript-box" aria-live="polite" title="Insight responses (visual + aural cues)">No insights yet.</div>
                 </div>
                 
                 <!-- Video Feed Section (confined to sidebar) -->
@@ -1234,39 +1046,19 @@
                 
                 <!-- Engagement Metrics: MediaPipe (30 signifiers) or Azure Face API (emotions + B2B composites) -->
                 <div class="sidebar-section engagement-signifiers-panel">
+                    <div class="sidebar-section-title engagement-metrics-title">Engagement Metrics</div>
+                    <div id="engagementMetricsHint" class="engagement-metrics-hint" style="display: none;"></div>
                     <div id="signifierPanelContainer"></div>
-                    <div id="azureMetricsPanelContainer" style="display: none;"></div>
-                </div>
-                
-                <!-- Chat Section -->
-                <div class="sidebar-section chat-transcription-section">
-                    <div class="chat-transcription-header">Chat Conversation</div>
-                    <div id="chatHistory" contentEditable="true"></div>
-                    <div class="message-input-container">
-                        <div class="message-input-wrapper">
-                            <input 
-                                type="text" 
-                                id="userMessageInput" 
-                                placeholder="Type your message here or use microphone..." 
-                                disabled
-                                onkeypress="handleMessageKeyPress(event)"
-                            />
-                            <button id="sendMessageBtn" onclick="sendMessage()" disabled>
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                                </svg>
-                                Send
-                            </button>
-                        </div>
-                    </div>
+                    <div id="azureMetricsPanelContainer" class="metrics-panel-container" style="display: none;"></div>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- Metric spike toast container (popup when a metric group spikes) -->
+    <div id="metricSpikeToast" class="metric-spike-toast" style="display: none;" aria-live="polite"></div>
+
     <!-- Modular JavaScript Modules -->
-    <script src="/static/js/engagement-bar.js"></script>
     <script src="/static/js/signifier-panel.js"></script>
     <script src="/static/js/azure-metrics-panel.js"></script>
     <script src="/static/js/engagement-detector.js"></script>
@@ -1276,9 +1068,17 @@
 
     <script>
         // ========================================================================
+        // Business Meeting Copilot - Main Application Script
+        // ========================================================================
+        // Flow: 1) Insights Session takes audio from feed (STT) -> transcript to backend
+        //       2) Engagement detector takes video from feed -> visual cues (G1-G4 spikes)
+        //       3) On spike: backend fuses visual + aural context -> Azure OpenAI -> insight
+        //       4) Frontend: popup + Insight Transcript box + TTS (avatar)
+        // ========================================================================
         // Global Variables & Configuration
         // ========================================================================
         var speechRecognizer
+        var feedSpeechRecognizer = null  // STT on meeting partner (feed) audio for aural cues; transcript sent to backend
         var avatarSynthesizer
         var peerConnection
         var peerConnectionDataChannel
@@ -1287,7 +1087,6 @@
         // Session Management (modular)
         var sessionManager = null
         var avatarChatManager = null
-        var engagementBarDisplay = null
         var engagementDetector = null
         var signifierPanel = null
         var azureMetricsPanel = null
@@ -1297,29 +1096,92 @@
         var avatarAudioInitialized = false
         var sessionActive = false
         var dataSources = []
+        
+        /** Update the Insights Session status pill (Idle / Live). */
+        function updateSessionStatusIndicator(isLive) {
+            var el = document.getElementById('sessionStatusIndicator')
+            if (!el) return
+            if (isLive) {
+                el.textContent = '● Live'
+                el.className = 'session-status session-status-live'
+                el.title = 'Insights session is running'
+            } else {
+                el.textContent = '● Idle'
+                el.className = 'session-status session-status-idle'
+                el.title = 'Insights session status'
+            }
+        }
         var videoSourcePromptShown = false  // Track if video source prompt has been shown
 
         // ========================================================================
-        // Engagement Alerts (drop / plateau)
+        // Metric spike alerts (popup when a metric group spikes)
         // ========================================================================
+        var spikeToastTimeout = null;
         
         /**
-         * Handle engagement alert from backend (significant drop or plateau).
-         * Avatar interrupts current response and speaks the alert and suggestions.
+         * Append an insight response to the sidebar transcript box (for verification).
+         * @param {string} message - Insight text from Azure OpenAI
          */
-        function handleEngagementAlert(alert) {
+        function appendToInsightTranscript(message) {
+            var box = document.getElementById('insightTranscript');
+            if (!box) return;
+            var time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var entry = '<div class="insight-entry"><span class="insight-time">' + time + '</span><br/>' + String(message).replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+            if (box.innerHTML === 'No insights yet.' || !box.innerHTML.trim()) {
+                box.innerHTML = entry;
+            } else {
+                box.innerHTML += entry;
+            }
+            box.scrollTop = box.scrollHeight;
+        }
+        
+        /**
+         * Clear the insight transcript (when session stops).
+         */
+        function clearInsightTranscript() {
+            var box = document.getElementById('insightTranscript');
+            if (box) box.innerHTML = 'No insights yet.';
+        }
+        
+        /**
+         * Handle metric spike alert: show popup, append to transcript, speak via TTS.
+         * Flow: visual spike + optional aural context -> Azure OpenAI -> popup + TTS.
+         */
+        function handleMetricSpikeAlert(alert) {
             if (!alert || !alert.message) return;
-            if (!avatarChatManager || !avatarAudioInitialized) {
-                console.warn('Engagement alert received but avatar not ready:', alert.type);
-                return;
+            var msg = String(alert.message).trim();
+            if (!msg) return;
+            // 1. Append to sidebar transcript for verification
+            appendToInsightTranscript(msg);
+            // 2. Show popup toast
+            var el = document.getElementById('metricSpikeToast');
+            if (el) {
+                if (spikeToastTimeout) clearTimeout(spikeToastTimeout);
+                el.textContent = msg;
+                el.style.display = 'block';
+                el.classList.remove('hiding');
+                spikeToastTimeout = setTimeout(function () {
+                    el.classList.add('hiding');
+                    spikeToastTimeout = setTimeout(function () {
+                        el.style.display = 'none';
+                        el.classList.remove('hiding');
+                        spikeToastTimeout = null;
+                    }, 220);
+                }, 6000);
             }
-            avatarChatManager.interruptCurrentResponse();
-            var parts = [alert.message];
-            if (alert.suggestions && alert.suggestions.length) {
-                parts.push(alert.suggestions.slice(0, 3).join(' '));
+            // 3. TTS via avatar (when session is active; speak() handles internal null checks)
+            if (avatarChatManager && avatarAudioInitialized && sessionActive) {
+                try {
+                    avatarChatManager.interruptCurrentResponse();
+                    setTimeout(function () {
+                        if (sessionActive && avatarChatManager && avatarAudioInitialized) {
+                            try { avatarChatManager.speak(msg); } catch (e) { console.warn('Insight TTS:', e); }
+                        }
+                    }, 120);
+                } catch (e) {
+                    console.warn('Insight TTS error:', e);
+                }
             }
-            var text = parts.join(' ');
-            setTimeout(function () { avatarChatManager.speak(text); }, 120);
         }
         
         // ========================================================================
@@ -1328,16 +1190,11 @@
         
         /**
          * Initialize all systems (engagement detection, session manager).
-         * Avatar chat manager is initialized when avatar session starts.
+         * Insights/chat manager is initialized when insights session starts.
          */
         function initializeSystems() {
             try {
-                var apiBase = 'http://localhost:5000';
-                // Initialize engagement bar display
-                engagementBarDisplay = new EngagementBarDisplay({
-                    updateInterval: 500
-                });
-
+                var apiBase = getApiBase();
                 // Initialize 30-metrics signifier panel (MediaPipe)
                 signifierPanel = new SignifierPanel({ containerId: 'signifierPanelContainer' });
                 signifierPanel.init();
@@ -1345,14 +1202,13 @@
                 azureMetricsPanel = new AzureMetricsPanel({ containerId: 'azureMetricsPanelContainer' });
                 azureMetricsPanel.init();
                 
-                // Initialize engagement detector
+                // Initialize engagement detector (no bar; spike alerts show popup)
                 engagementDetector = new EngagementDetector({
-                    barDisplay: engagementBarDisplay,
                     signifierPanel: signifierPanel,
                     azureMetricsPanel: azureMetricsPanel,
                     apiBaseUrl: apiBase,
                     pollInterval: 200,
-                    onAlert: handleEngagementAlert,
+                    onAlert: handleMetricSpikeAlert,
                     onPartnerStreamStateChange: updateStopPartnerSharingButton
                 });
                 
@@ -1385,7 +1241,14 @@
         // Video Source Selection & Engagement Feed Display
         // ========================================================================
         
-        var apiBaseUrl = 'http://localhost:5000';
+        /** API base URL: same origin when served with backend, fallback for static open. */
+        function getApiBase() {
+            if (typeof window !== 'undefined' && window.location && window.location.origin) {
+                return window.location.origin;
+            }
+            return 'http://localhost:5000';
+        }
+        var apiBaseUrl = getApiBase();
         
         /**
          * Show the engagement detection video feed in the main display area.
@@ -1404,6 +1267,15 @@
             if (wrap) wrap.style.display = 'block';
         }
         
+        /** Set the engagement metrics hint message (shown when no metrics available). */
+        function setEngagementHint(message) {
+            var el = document.getElementById('engagementMetricsHint');
+            if (el) {
+                el.textContent = message || '';
+                el.style.display = message ? 'block' : 'none';
+            }
+        }
+
         /**
          * Hide the engagement feed and stop requesting frames.
          * Setting src to empty string stops the browser from requesting more frames.
@@ -1431,9 +1303,9 @@
             
             if (!videoSourceSelector) {
                 console.warn('Video source selector not initialized');
-                // Fallback to default (stream) with MediaPipe if systems are ready
+                // Fallback to default (stream) with auto detection if systems are ready
                 if (sessionManager) {
-                    sessionManager.startSession('stream', null, 'mediapipe')
+                    sessionManager.startSession('stream', null, null)
                         .then(function () { showEngagementFeed(); })
                         .catch(err => {
                             console.warn('Could not start parallel session:', err);
@@ -1452,7 +1324,7 @@
          * @param {Object} selection - Selected video source options
          */
         async function handleVideoSourceSelected(selection) {
-            const { sourceType, sourcePath, file, detectionMethod } = selection;
+            const { sourceType, sourcePath, file } = selection;
             
             try {
                 // If file is selected, upload it first
@@ -1470,7 +1342,7 @@
                         const formData = new FormData();
                         formData.append('video', file);
                         
-                        const uploadResponse = await fetch('http://localhost:5000/engagement/upload-video', {
+                        const uploadResponse = await fetch(getApiBase() + '/engagement/upload-video', {
                             method: 'POST',
                             body: formData
                         });
@@ -1488,15 +1360,14 @@
                     }
                 }
                 
-                // Default to 'mediapipe' if not specified
-                const selectedDetectionMethod = detectionMethod || 'mediapipe';
-                
+                // App chooses optimal detection method (auto); no selection passed
                 // Partner: getDisplayMedia must run under the same user gesture as the click.
                 // Call it first (before any await), then start session and frame stream on success.
                 if (sourceType === 'partner' && sessionManager && engagementDetector) {
                     let stream;
                     try {
-                        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+                        // Request audio when available so partner speech can be sent to backend for insight generation
+                        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
                     } catch (shareErr) {
                         if (shareErr.name === 'NotAllowedError') {
                             console.log('Share canceled by user');
@@ -1510,17 +1381,20 @@
                         }
                         return;
                     }
-                    await sessionManager.startSession('partner', null, selectedDetectionMethod);
+                    await sessionManager.startSession('partner', null, null);
                     showEngagementFeed();
                     engagementDetector.startPartnerFrameStream(stream);
-                    console.log('Engagement detection started with Meeting Partner Video');
+                    if (stream.getAudioTracks().length > 0) {
+                        await startFeedAudioTranscript(stream);
+                    }
+                    console.log('Engagement detection started with Meeting Partner Video (video → engagement, audio → aural cues)');
                     return;
                 }
                 
                 if (sessionManager) {
-                    await sessionManager.startSession(sourceType, finalSourcePath, selectedDetectionMethod);
+                    await sessionManager.startSession(sourceType, finalSourcePath, null);
                     showEngagementFeed();
-                    console.log(`Engagement detection started with source: ${sourceType}, method: ${selectedDetectionMethod}`);
+                    console.log('Engagement detection started with source: ' + sourceType);
                 }
             } catch (error) {
                 console.error('Error starting engagement detection with selected source:', error);
@@ -1530,11 +1404,13 @@
         
         /**
          * Show or hide the "Stop sharing" button based on partner stream state.
+         * When partner stream ends, also stop feed-audio transcript (aural cues).
          * @param {boolean} isActive - Whether Meeting Partner Video capture is active
          */
         function updateStopPartnerSharingButton(isActive) {
             var btn = document.getElementById('stopPartnerSharing');
             if (btn) btn.style.display = isActive ? 'inline-block' : 'none';
+            if (!isActive) stopFeedAudioTranscript();
         }
         
         /**
@@ -1544,6 +1420,81 @@
             if (engagementDetector && engagementDetector.isPartnerStreamActive()) {
                 engagementDetector.stopPartnerFrameStream();
             }
+            stopFeedAudioTranscript();
+        }
+        
+        /**
+         * Start speech recognition on the meeting partner (feed) audio stream.
+         * Recognized text is sent to POST /engagement/transcript for B2B insight generation (aural cues).
+         * Runs in parallel with engagement detector (video cues). Use when source is 'partner' and stream has audio.
+         * @param {MediaStream} stream - getDisplayMedia stream with audio track (meeting partner)
+         */
+        async function startFeedAudioTranscript(stream) {
+            if (!stream || stream.getAudioTracks().length === 0) return;
+            stopFeedAudioTranscript();
+            if (!appConfig) await loadConfig();
+            if (!appConfig) {
+                console.warn('Feed audio transcript: config not loaded, skipping.');
+                return;
+            }
+            try {
+                const tokenRes = await fetch(getApiBase() + '/speech/token');
+                if (!tokenRes.ok) {
+                    console.warn('Feed audio transcript: failed to get speech token.');
+                    return;
+                }
+                const { token } = await tokenRes.json();
+                const cogSvcRegion = appConfig.speech.region;
+                const privateEndpointEnabled = appConfig.speech.privateEndpointEnabled || false;
+                let speechRecognitionConfig;
+                if (privateEndpointEnabled) {
+                    const privateEndpoint = appConfig.speech.privateEndpoint || '';
+                    speechRecognitionConfig = SpeechSDK.SpeechConfig.fromEndpoint(
+                        new URL('wss://' + privateEndpoint + '/stt/speech/universal/v2'),
+                        token
+                    );
+                } else {
+                    speechRecognitionConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, cogSvcRegion);
+                }
+                speechRecognitionConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_LanguageIdMode, 'Continuous');
+                var sttLocales = (appConfig.sttTts && appConfig.sttTts.sttLocales) ? appConfig.sttTts.sttLocales.split(',') : ['en-US'];
+                var autoDetectSourceLanguageConfig = SpeechSDK.AutoDetectSourceLanguageConfig.fromLanguages(sttLocales);
+                var audioConfig = SpeechSDK.AudioConfig.fromStreamInput(stream);
+                feedSpeechRecognizer = SpeechSDK.SpeechRecognizer.FromConfig(
+                    speechRecognitionConfig,
+                    autoDetectSourceLanguageConfig,
+                    audioConfig
+                );
+                feedSpeechRecognizer.recognized = function (s, e) {
+                    if (e.result.reason !== SpeechSDK.ResultReason.RecognizedSpeech) return;
+                    var text = (e.result.text || '').trim();
+                    if (!text) return;
+                    fetch(getApiBase() + '/engagement/transcript', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text })
+                    }).catch(function (err) { console.warn('Feed transcript POST failed:', err); });
+                };
+                feedSpeechRecognizer.startContinuousRecognitionAsync(
+                    function () { console.log('Feed audio (aural cues) transcript started.'); },
+                    function (err) { console.warn('Feed audio transcript start failed:', err); feedSpeechRecognizer = null; }
+                );
+            } catch (err) {
+                console.warn('Start feed audio transcript failed:', err);
+                feedSpeechRecognizer = null;
+            }
+        }
+        
+        /**
+         * Stop speech recognition on feed audio and release recognizer.
+         */
+        function stopFeedAudioTranscript() {
+            if (!feedSpeechRecognizer) return;
+            try {
+                feedSpeechRecognizer.stopContinuousRecognitionAsync(function () {}, function () {});
+                feedSpeechRecognizer.close();
+            } catch (e) {}
+            feedSpeechRecognizer = null;
         }
         
         /**
@@ -1551,31 +1502,36 @@
          */
         function handleVideoSourceCanceled() {
             console.log('Video source selection canceled');
-            // Mark as shown so it doesn't pop up again automatically
             videoSourcePromptShown = true;
-            
-            // Optionally start with default (webcam) if user cancels
-            // Or leave it so user can manually start later
-            // For now, we'll just mark it as shown and let user start manually
+            // Ensure engagement is running (e.g. if auto-start failed)
+            if (sessionManager && engagementDetector && !engagementDetector.isActive) {
+                sessionManager.startSession('webcam', null, null)
+                    .then(function (ok) { if (ok) showEngagementFeed(); })
+                    .catch(function (err) { console.warn('Could not start engagement with webcam:', err); });
+            }
         }
 
         // Configuration from backend
         async function loadConfig() {
             try {
-                const response = await fetch('http://localhost:5000/config/all')
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch config: ${response.status}`)
-                }
-                appConfig = await response.json()
-                console.log('Configuration loaded from backend', appConfig)
+                const response = await fetch(getApiBase() + '/config/all');
+                if (!response.ok) throw new Error('Failed to fetch config: ' + response.status);
+                appConfig = await response.json();
+                console.log('Configuration loaded from backend', appConfig);
             } catch (error) {
-                console.error('Failed to load configuration:', error)
-                alert('Failed to load configuration from backend. Please ensure the server is running.')
+                console.error('Failed to load configuration:', error);
+                alert('Failed to load configuration from backend. Please ensure the server is running.');
             }
         }
 
-        // Initialize avatar session with video and audio
-        async function initializeAvatarSession() {
+        /**
+         * Start Insights Session (audio-only).
+         * Pairs speech cues (from meeting partner audio when available) with visual cues
+         * (engagement detector) for real-time actionable insights. Popup messages are
+         * generated by Azure OpenAI when a moment is detected (e.g. spike in interest,
+         * confusion, resistance, or decision-ready). See docs/DOCUMENTATION.md.
+         */
+        async function initializeInsightsSession() {
             if (!appConfig) {
                 await loadConfig()
             }
@@ -1589,7 +1545,7 @@
             const privateEndpointEnabled = appConfig.speech.privateEndpointEnabled || false
 
             // Get speech token from backend
-            const tokenRes = await fetch('http://localhost:5000/speech/token')
+            const tokenRes = await fetch(getApiBase() + '/speech/token')
             if (!tokenRes.ok) {
                 alert('Failed to get speech token from backend.')
                 return
@@ -1656,8 +1612,8 @@
                 initMessages();
             }
 
-            // Get relay token and set up WebRTC for avatar audio
-            const relayRes = await fetch('http://localhost:5000/avatar/relay-token')
+            // Get relay token and set up WebRTC for insight audio (audio-only; no avatar video)
+            const relayRes = await fetch(getApiBase() + '/avatar/relay-token')
             if (!relayRes.ok) {
                 alert('Failed to get relay token from backend.')
                 return
@@ -1669,7 +1625,11 @@
             setupWebRTCForAudio(iceServerUrl, iceServerUsername, iceServerCredential)
         }
 
-        // Setup WebRTC connection for avatar video and audio
+        /**
+         * Setup WebRTC for insight playback (audio-only).
+         * Audio track is used for TTS when insights are spoken; video track is not shown
+         * so the session is audio-only from the user's perspective.
+         */
         function setupWebRTCForAudio(iceServerUrl, iceServerUsername, iceServerCredential) {
             peerConnection = new RTCPeerConnection({
                 iceServers: [{
@@ -1679,7 +1639,7 @@
                 }]
             })
 
-            // Handle audio and video tracks from avatar (append to avatar PIP; main area shows engagement feed)
+            // Audio-only: use audio track for insight TTS; do not show avatar video
             var avatarContainer = function () { return document.getElementById('avatarPip'); };
             peerConnection.ontrack = function (event) {
                 if (event.track.kind === 'audio') {
@@ -1691,7 +1651,24 @@
                         audioElement.play()
                     })
                     audioElement.onplaying = () => {
-                        console.log(`WebRTC ${event.track.kind} channel connected.`)
+                        console.log('Insights session: audio channel connected.')
+                        avatarAudioInitialized = true
+                        sessionActive = true
+                        updateSessionStatusIndicator(true)
+                        document.getElementById('initAvatar').disabled = true
+                        document.getElementById('microphone').disabled = false
+                        document.getElementById('stopSession').disabled = false
+                        var msgInput = document.getElementById('userMessageInput');
+                        var sendBtn = document.getElementById('sendMessageBtn');
+                        if (msgInput) msgInput.disabled = false;
+                        if (sendBtn) sendBtn.disabled = false;
+                        if (msgInput) msgInput.focus();
+                        if (sessionManager) {
+                            sessionManager.isAvatarInitialized = true;
+                        }
+                        if (!videoSourcePromptShown && videoSourceSelector) {
+                            promptVideoSourceSelection();
+                        }
                     }
                     var pip = avatarContainer()
                     if (pip) {
@@ -1700,42 +1677,9 @@
                         pip.appendChild(audioElement)
                     }
                 }
-
+                // Video track: do not add to DOM (audio-only session)
                 if (event.track.kind === 'video') {
-                    let videoElement = document.createElement('video')
-                    videoElement.id = 'videoPlayer'
-                    videoElement.srcObject = event.streams[0]
-                    videoElement.autoplay = false
-                    videoElement.addEventListener('loadeddata', () => {
-                        videoElement.play()
-                    })
-                    videoElement.playsInline = true
-                    videoElement.style.width = '100%'
-                    videoElement.style.height = '100%'
-                    var pip = avatarContainer()
-                    if (pip) {
-                        var existing = pip.querySelector('video')
-                        if (existing) existing.remove()
-                        pip.appendChild(videoElement)
-                    }
-
-                    videoElement.onplaying = () => {
-                        console.log(`WebRTC ${event.track.kind} channel connected.`)
-                        avatarAudioInitialized = true
-                        sessionActive = true
-                        document.getElementById('initAvatar').disabled = true
-                        document.getElementById('microphone').disabled = false
-                        document.getElementById('stopSession').disabled = false
-                        document.getElementById('userMessageInput').disabled = false
-                        document.getElementById('sendMessageBtn').disabled = false
-                        document.getElementById('userMessageInput').focus()
-                        if (sessionManager) {
-                            sessionManager.isAvatarInitialized = true;
-                        }
-                        if (!videoSourcePromptShown && videoSourceSelector) {
-                            promptVideoSourceSelection();
-                        }
-                    }
+                    event.track.enabled = false
                 }
             }
 
@@ -1743,18 +1687,20 @@
             peerConnection.addEventListener("datachannel", event => {
                 peerConnectionDataChannel = event.channel
             peerConnectionDataChannel.onmessage = e => {
-                let subtitles = document.getElementById('subtitles')
-                const webRTCEvent = JSON.parse(e.data)
-                if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && appConfig.avatar.showSubtitles) {
-                    subtitles.hidden = false
-                    // Get current speaking text from avatar chat manager if available
-                    if (avatarChatManager && avatarChatManager.speakingText) {
-                        subtitles.innerHTML = avatarChatManager.speakingText
+                try {
+                    const webRTCEvent = JSON.parse(e.data)
+                    const subtitles = document.getElementById('subtitles')
+                    if (!subtitles) return
+                    if (webRTCEvent.event.eventType === 'EVENT_TYPE_TURN_START' && appConfig && appConfig.avatar && appConfig.avatar.showSubtitles) {
+                        subtitles.hidden = false
+                        if (avatarChatManager && avatarChatManager.speakingText) {
+                            subtitles.innerHTML = avatarChatManager.speakingText
+                        }
+                    } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
+                        subtitles.hidden = true
                     }
-                } else if (webRTCEvent.event.eventType === 'EVENT_TYPE_SESSION_END' || webRTCEvent.event.eventType === 'EVENT_TYPE_SWITCH_TO_IDLE') {
-                    subtitles.hidden = true
-                }
-                console.log("[" + (new Date()).toISOString() + "] WebRTC event received: " + e.data)
+                    console.log("[" + (new Date()).toISOString() + "] WebRTC event: " + e.data)
+                } catch (err) { console.debug('WebRTC datachannel parse:', err) }
             }
             })
 
@@ -1790,6 +1736,7 @@
                     }
                     avatarAudioInitialized = true;
                     sessionActive = true;
+                    updateSessionStatusIndicator(true);
                 } else {
                     console.log("[" + (new Date()).toISOString() + "] Unable to start avatar. Result ID: " + r.resultId)
                     if (r.reason === SpeechSDK.ResultReason.Canceled) {
@@ -1800,11 +1747,13 @@
                         console.log("Unable to start avatar: " + cancellationDetails.errorDetails)
                     }
                     document.getElementById('initAvatar').disabled = false
+                    updateSessionStatusIndicator(false)
                 }
             }).catch((error) => {
                 console.log("[" + (new Date()).toISOString() + "] Avatar failed to start. Error: " + error)
-                alert("Failed to initialize avatar session: " + error)
+                alert("Failed to start insights session: " + error)
                 document.getElementById('initAvatar').disabled = false
+                updateSessionStatusIndicator(false)
             })
         }
         
@@ -1813,33 +1762,35 @@
         // ========================================================================
         
         /**
-         * Stop avatar session and clean up all resources.
+         * Stop insights session and clean up all resources.
          */
         async function stopSession() {
             // Stop parallel session (engagement detection + chat)
             if (sessionManager) {
                 await sessionManager.stopSession();
             }
-            
-            // Stop avatar synthesizer
-            if (avatarSynthesizer !== undefined) {
-                avatarSynthesizer.close();
-            }
-            
-            // Stop speech recognizer
-            if (speechRecognizer !== undefined) {
-                speechRecognizer.stopContinuousRecognitionAsync();
-                speechRecognizer.close();
-            }
-            
-            // Close peer connection
-            if (peerConnection) {
-                peerConnection.close();
-            }
+            stopFeedAudioTranscript();
+
+            try {
+                if (avatarSynthesizer) avatarSynthesizer.close();
+            } catch (e) { console.debug('Avatar close:', e); }
+
+            try {
+                if (speechRecognizer) {
+                    speechRecognizer.stopContinuousRecognitionAsync(function () {}, function () {});
+                    speechRecognizer.close();
+                }
+            } catch (e) { console.debug('Speech recognizer close:', e); }
+
+            try {
+                if (peerConnection) peerConnection.close();
+            } catch (e) { console.debug('PeerConnection close:', e); }
             
             // Update state
             sessionActive = false;
             avatarAudioInitialized = false;
+            updateSessionStatusIndicator(false);
+            clearInsightTranscript();
             
             // Stop engagement feed and clear avatar PIP (keep layout structure)
             hideEngagementFeed();
@@ -1847,13 +1798,18 @@
             if (avatarPipEl) avatarPipEl.innerHTML = '';
             
             // Update UI
-            document.getElementById('initAvatar').disabled = false;
-            document.getElementById('microphone').disabled = true;
-            document.getElementById('stopSession').disabled = true;
-            document.getElementById('userMessageInput').disabled = true;
-            document.getElementById('userMessageInput').value = '';
-            document.getElementById('sendMessageBtn').disabled = true;
-            document.getElementById('stopSpeaking').disabled = true;
+            var initBtn = document.getElementById('initAvatar');
+            var micBtn = document.getElementById('microphone');
+            var stopBtn = document.getElementById('stopSession');
+            var speakBtn = document.getElementById('stopSpeaking');
+            if (initBtn) initBtn.disabled = false;
+            if (micBtn) micBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = true;
+            if (speakBtn) speakBtn.disabled = true;
+            var msgInput = document.getElementById('userMessageInput');
+            var sendBtn = document.getElementById('sendMessageBtn');
+            if (msgInput) { msgInput.disabled = true; msgInput.value = ''; }
+            if (sendBtn) sendBtn.disabled = true;
         }
 
         // HTML encoding
@@ -1986,7 +1942,7 @@
 
         function microphone() {
             if (!speechRecognizer || !avatarAudioInitialized || !sessionActive) {
-                alert('Please initialize avatar session first, then start microphone.')
+                alert('Please start insights session first, then start microphone.')
                 return
             }
 
@@ -2060,9 +2016,10 @@
         }
         
         async function sendMessage() {
-            const input = document.getElementById('userMessageInput')
-            const sendBtn = document.getElementById('sendMessageBtn')
-            const message = input.value.trim()
+            const input = document.getElementById('userMessageInput');
+            const sendBtn = document.getElementById('sendMessageBtn');
+            if (!input) return;
+            const message = (input.value || '').trim();
             
             if (!message) {
                 return
@@ -2074,7 +2031,7 @@
             }
             
             if (!avatarAudioInitialized || !sessionActive) {
-                alert('Please initialize avatar session first.')
+                alert('Please start insights session first.')
                 return
             }
             
@@ -2106,43 +2063,43 @@
         // Initialization
         // ========================================================================
         
-        // Initialize systems when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => {
-                initializeSystems();
-                // Show video source prompt after systems are initialized
-                setTimeout(() => {
-                    promptVideoSourceSelection();
-                }, 500); // Small delay to ensure DOM is fully ready
-            });
-        } else {
+        // Initialize systems and auto-start engagement with webcam so metrics work immediately.
+        function onSystemsReady() {
             initializeSystems();
-            // Show video source prompt after systems are initialized
-            setTimeout(() => {
-                promptVideoSourceSelection();
-            }, 500);
+            // Auto-start engagement with webcam so metrics populate without requiring modal interaction
+            if (sessionManager) {
+                sessionManager.startSession('webcam', null, null)
+                    .then(function (ok) {
+                        if (ok) {
+                            showEngagementFeed();
+                            console.log('Engagement detection auto-started with webcam');
+                        } else {
+                            setEngagementHint('Could not start. Click Change Video Source to retry.');
+                        }
+                    })
+                    .catch(function (err) {
+                        console.warn('Engagement auto-start error:', err);
+                        setEngagementHint('Could not connect. Ensure the server is running and click Change Video Source to retry.');
+                    });
+            }
+            // Modal available via "Change Video Source" button; no auto-popup on load
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onSystemsReady);
+        } else {
+            onSystemsReady();
         }
 
         window.onload = () => {
             loadConfig().then(() => {
-                // Initialize messages after config is loaded
                 if (avatarChatManager) {
                     avatarChatManager.initMessages();
                 } else {
                     initMessages();
                 }
             });
-            
-            // Ensure systems are initialized
-            if (!sessionManager || !engagementBarDisplay || !engagementDetector) {
-                initializeSystems();
-            }
-            
-            // Show video source prompt if not already shown
-            if (!videoSourcePromptShown) {
-                setTimeout(() => {
-                    promptVideoSourceSelection();
-                }, 1000); // Delay to ensure everything is ready
+            if (!sessionManager || !engagementDetector) {
+                onSystemsReady();
             }
         }
     </script>

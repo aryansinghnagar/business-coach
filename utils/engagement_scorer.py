@@ -1,17 +1,12 @@
 """
 Engagement Scorer Module
 
-This module provides engagement scoring based on facial features extracted from
-face detection (MediaPipe or Azure Face API). It computes multiple metrics and
-combines them into an overall engagement score (0-100).
-
-The scoring system considers:
-- Attention level (eye openness, focus)
-- Eye contact (gaze direction)
-- Facial expressiveness (micro-expressions, muscle activity)
-- Head movement (stability vs. excessive movement)
-- Facial symmetry (indicator of engagement vs. distraction)
-- Mouth activity (speaking, smiling, etc.)
+Computes engagement score (0-100) from facial features. Psychology-informed:
+- Eye contact: strong correlate of shared attention (PNAS 2021); marks peak engagement.
+- Attention (EAR): eye openness; drowsiness/look-down reduces sharply.
+- Head orientation: forward-facing indicates focus; yaw/pitch matter.
+- Expressiveness: moderate variance = engaged; flat or chaotic = disengaged.
+- Symmetry: balanced expression indicates focus; asymmetry can signal discomfort.
 """
 
 import numpy as np
@@ -51,14 +46,14 @@ class EngagementScorer:
     """
     
     def __init__(self):
-        """Initialize the engagement scorer with default weights."""
+        """Psychology-informed metric weights: eye contact and attention are strongest engagement signals."""
         self.weights = {
-            'attention': 0.25,
-            'eye_contact': 0.20,
-            'facial_expressiveness': 0.15,
-            'head_movement': 0.15,
-            'symmetry': 0.10,
-            'mouth_activity': 0.15,
+            'attention': 0.24,
+            'eye_contact': 0.26,
+            'facial_expressiveness': 0.14,
+            'head_movement': 0.14,
+            'symmetry': 0.11,
+            'mouth_activity': 0.11,
         }
     
     def compute_metrics(
@@ -133,11 +128,11 @@ class EngagementScorer:
             mouth_activity * self.weights['mouth_activity']
         )
         
-        # Weakest-link: one low metric pulls down, but not as harsh.
-        # Factor 0.55 + 0.45*min/100: min=0 -> 0.55, min=50 -> 0.775, min=100 -> 1.0.
+        # Weakest-link: one very low metric pulls down (captures disengagement)
+        # Softer curve: 0.58 + 0.42*min/100 so single low metric doesn't over-penalize
         min_m = min(attention, eye_contact, facial_expressiveness,
                     head_movement, symmetry, mouth_activity)
-        factor = 0.55 + 0.45 * (min_m / 100.0)
+        factor = 0.58 + 0.42 * (min_m / 100.0)
         score = raw * factor
         
         score = max(0.0, min(100.0, score))

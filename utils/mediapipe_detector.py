@@ -19,12 +19,12 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
     Uses MediaPipe Face Mesh to detect faces and extract 468 facial landmarks.
     """
     
-    def __init__(self, min_detection_confidence: float = 0.5, min_tracking_confidence: float = 0.5):
+    def __init__(self, min_detection_confidence: float = 0.15, min_tracking_confidence: float = 0.15):
         """
         Initialize MediaPipe face detector.
         
         Args:
-            min_detection_confidence: Minimum confidence for face detection (0-1)
+            min_detection_confidence: Minimum confidence for face detection (0-1). Lower (e.g. 0.15) helps in suboptimal lighting.
             min_tracking_confidence: Minimum confidence for face tracking (0-1)
         """
         self.mp_face_mesh = mp.solutions.face_mesh
@@ -32,8 +32,8 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
             static_image_mode=False,
             max_num_faces=1,
             refine_landmarks=True,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence
+            min_detection_confidence=max(0.01, min(0.99, float(min_detection_confidence))),
+            min_tracking_confidence=max(0.01, min(0.99, float(min_tracking_confidence)))
         )
         self._available = True
     

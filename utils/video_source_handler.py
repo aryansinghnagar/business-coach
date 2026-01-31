@@ -11,6 +11,7 @@ It abstracts away the differences between source types and provides a consistent
 API for reading frames from any supported source.
 """
 
+import sys
 import cv2
 from enum import Enum
 from typing import Optional, Tuple
@@ -103,33 +104,44 @@ class VideoSourceHandler:
     def initialize_source(
         self,
         source_type: VideoSourceType,
-        source_path: Optional[str] = None
+        source_path: Optional[str] = None,
+        lightweight: bool = False,
     ) -> bool:
         """
         Initialize a video source.
-        
+
         Args:
             source_type: Type of video source (WEBCAM, FILE, STREAM)
             source_path: Path to video file or stream URL (required for FILE/STREAM)
-        
-        Returns:
-            True if initialization successful, False otherwise
+            lightweight: If True, use lower webcam resolution (640x360) for faster processing
         """
-        # Release existing source if any
         self.release()
-        
         self.source_type = source_type
         self.source_path = source_path
-        
+
         try:
             if source_type == VideoSourceType.WEBCAM:
-                # Default webcam (index 0)
-                self.cap = cv2.VideoCapture(0)
-                
-                # Set webcam properties for better quality
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                self.cap.set(cv2.CAP_PROP_FPS, 30)
+                apis = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_ANY]
+                self.cap = None
+                for api in apis:
+                    for index in (0, 1, 2):
+                        try:
+                            cap = cv2.VideoCapture(index, api)
+                            if cap.isOpened() and cap.read()[0]:
+                                self.cap = cap
+                                break
+                        except Exception:
+                            pass
+                    if self.cap is not None:
+                        break
+                if not self.cap or not self.cap.isOpened():
+                    self.cap = cv2.VideoCapture(0)
+                if self.cap.isOpened():
+                    w, h = (640, 360) if lightweight else (1280, 720)
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
             elif source_type == VideoSourceType.FILE:
                 if not source_path:
@@ -139,14 +151,27 @@ class VideoSourceHandler:
                 
             elif source_type == VideoSourceType.STREAM:
                 # For STREAM type, if source_path is None, try to use webcam as fallback
-                # This handles the case where "stream" is selected but no URL is provided
                 if not source_path:
                     print("Warning: STREAM source type selected but no path provided, using webcam as fallback")
-                    self.cap = cv2.VideoCapture(0)
-                    # Set webcam properties for better quality
-                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    apis = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY] if sys.platform == "win32" else [cv2.CAP_ANY]
+                    self.cap = None
+                    for api in apis:
+                        for index in (0, 1):
+                            try:
+                                cap = cv2.VideoCapture(index, api)
+                                if cap.isOpened():
+                                    self.cap = cap
+                                    break
+                            except Exception:
+                                pass
+                        if self.cap is not None:
+                            break
+                    if not self.cap or not self.cap.isOpened():
+                        self.cap = cv2.VideoCapture(0)
+                    if self.cap.isOpened():
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                        self.cap.set(cv2.CAP_PROP_FPS, 30)
                 else:
                     self.cap = cv2.VideoCapture(source_path)
                     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

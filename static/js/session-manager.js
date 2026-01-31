@@ -43,20 +43,21 @@ class SessionManager {
      * 
      * @param {string} engagementSourceType - Video source type for engagement detection
      * @param {string|null} engagementSourcePath - Path for engagement detection
-     * @param {string} detectionMethod - Detection method ('mediapipe' or 'azure_face_api')
+     * @param {string|null} detectionMethod - Ignored; app chooses optimal method (auto)
      * @returns {Promise<boolean>} True if session started successfully
      */
     async startSession(engagementSourceType = 'stream', engagementSourcePath = null, detectionMethod = null) {
         try {
-            // Start engagement detection in parallel
             if (this.engagementDetector) {
-                await this.engagementDetector.start(engagementSourceType, engagementSourcePath, detectionMethod);
+                const ok = await this.engagementDetector.start(engagementSourceType, engagementSourcePath, detectionMethod);
+                this.isSessionActive = ok;
+                return ok;
             }
-            
             this.isSessionActive = true;
             return true;
         } catch (error) {
             console.error('Error starting session:', error);
+            this.isSessionActive = false;
             return false;
         }
     }
@@ -154,7 +155,10 @@ class SessionManager {
             if (!response.ok) {
                 throw new Error(`Chat API response status: ${response.status} ${response.statusText}`);
             }
-            
+            if (!response.body) {
+                throw new Error('No response body');
+            }
+
             const reader = response.body.getReader();
             this.currentStreamReader = reader;
             const decoder = new TextDecoder();

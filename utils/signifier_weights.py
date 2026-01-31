@@ -5,16 +5,21 @@ Loads pre-trained weights for the 30 expression signifiers and 4 group weights
 from an ML backend (URL), local file, or uses built-in defaults. Used by
 ExpressionSignifierEngine for weighted individual and overall score calculation.
 
+Psychology-informed defaults (2020s research):
+- Eye contact: strong correlate of shared attention and engagement (PNAS 2021).
+- Head tilt/nod: signals interest and rapport; head movements hard to fake.
+- Duchenne: eye constriction weakly predicts positive emotion; de-weighted.
+- Gaze aversion, lip compression: robust resistance cues.
+- Smile transition + relaxed exhale: decision-ready indicators.
+- Cognitive load (G2): look away, thinking brow valid; context-dependent.
+
 JSON format:
-  {"signifier": [w1..w30], "group": [W1, W2, W3, W4]}
-- signifier: 30 floats, one per signifier in SIGNIFIER_KEYS_ORDER. Weight for
-  weighted-average within each group. Use 1.0 for equal.
-- group: 4 floats for G1..G4 in composite. Default [0.35, 0.15, 0.35, 0.15].
+  {"signifier": [w1..w30], "group": [W1, W2, W3, W4], optional "fusion": {"azure": float, "mediapipe": float}}
 """
 
 import json
 import os
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 try:
     import requests
@@ -34,14 +39,34 @@ SIGNIFIER_KEYS_ORDER: List[str] = [
     "g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition",
 ]
 
-DEFAULT_SIGNIFIER_WEIGHTS: List[float] = [1.0] * 30
-DEFAULT_GROUP_WEIGHTS: List[float] = [0.35, 0.15, 0.35, 0.15]
+# Psychology-informed signifier weights: higher = stronger engagement/emotion correlate
+# G1: eye_contact, head_tilt, rhythmic_nodding up; duchenne, pupil_dilation down (weak/context-dependent)
+# G3: gaze_aversion, lip_compression up (robust resistance cues); contempt moderate
+# G4: smile_transition, fixed_gaze up (decision-ready)
+DEFAULT_SIGNIFIER_WEIGHTS: List[float] = [
+    0.85, 0.70, 1.00, 1.40, 1.20,  # g1: duchenne, pupil, eyebrow_flash, eye_contact, head_tilt
+    1.25, 1.00, 1.35, 1.10, 1.00,  # g1: forward_lean, symmetry, nodding, parted_lips, softened_forehead
+    1.00, 1.00, 1.15, 1.30, 0.85,  # g2: look_up_lr, lip_pucker, eye_squint, thinking_brow, chin_stroke
+    1.10, 1.00,                     # g2: stillness, lowered_brow
+    1.20, 1.10, 1.35, 1.00, 1.25,  # g3: contempt, nose_crinkle, lip_compression, eye_block, jaw_clench
+    1.00, 1.45, 1.05, 0.85, 0.80,  # g3: rapid_blink, gaze_aversion, no_nod, narrowed_pupils, mouth_cover
+    1.25, 1.35, 1.40,               # g4: relaxed_exhale, fixed_gaze, smile_transition
+]
+
+# Group weights: G1 (interest), G2 (cognitive load), G3 (resistance), G4 (decision-ready)
+# Balanced; G2 (cognitive load) elevated—thinking/evaluating is meaningful in B2B
+DEFAULT_GROUP_WEIGHTS: List[float] = [0.30, 0.20, 0.30, 0.20]
+
+# Fusion weights for unified mode: score = azure_w * azure_score + mediapipe_w * mediapipe_score
+DEFAULT_FUSION_AZURE: float = 0.5
+DEFAULT_FUSION_MEDIAPIPE: float = 0.5
 
 # In-memory weights (updated by load_weights, set_weights)
 _current: Dict[str, List[float]] = {
     "signifier": list(DEFAULT_SIGNIFIER_WEIGHTS),
     "group": list(DEFAULT_GROUP_WEIGHTS),
 }
+_fusion: Dict[str, float] = {"azure": DEFAULT_FUSION_AZURE, "mediapipe": DEFAULT_FUSION_MEDIAPIPE}
 
 
 def get_weights() -> Dict[str, List[float]]:
@@ -75,6 +100,33 @@ def _apply(data: dict) -> None:
         _current["signifier"] = [float(x) for x in sig]
     if isinstance(grp, list) and len(grp) == 4:
         _current["group"] = [float(x) for x in grp]
+    fusion = data.get("fusion")
+    if isinstance(fusion, dict):
+        a = fusion.get("azure")
+        m = fusion.get("mediapipe")
+        if isinstance(a, (int, float)) and isinstance(m, (int, float)):
+            total = float(a) + float(m)
+            if total > 0:
+                _fusion["azure"] = float(a) / total
+                _fusion["mediapipe"] = float(m) / total
+
+
+def get_fusion_weights() -> Tuple[float, float]:
+    """Return (azure_weight, mediapipe_weight) for unified score fusion. Sum to 1.0."""
+    return (_fusion["azure"], _fusion["mediapipe"])
+
+
+def set_fusion_weights(azure: float, mediapipe: float) -> Tuple[float, float]:
+    """
+    Set fusion weights for unified mode. Weights are normalized to sum to 1.0.
+    Returns (azure_weight, mediapipe_weight) after normalization.
+    """
+    total = float(azure) + float(mediapipe)
+    if total <= 0:
+        return get_fusion_weights()
+    _fusion["azure"] = float(azure) / total
+    _fusion["mediapipe"] = float(mediapipe) / total
+    return get_fusion_weights()
 
 
 def load_weights() -> Dict[str, List[float]]:
@@ -106,6 +158,12 @@ def load_weights() -> Dict[str, List[float]]:
     # 3) Defaults (already in _current from module load)
     _current["signifier"] = list(DEFAULT_SIGNIFIER_WEIGHTS)
     _current["group"] = list(DEFAULT_GROUP_WEIGHTS)
+    _fusion["azure"] = getattr(config, "FUSION_AZURE_WEIGHT", DEFAULT_FUSION_AZURE)
+    _fusion["mediapipe"] = getattr(config, "FUSION_MEDIAPIPE_WEIGHT", DEFAULT_FUSION_MEDIAPIPE)
+    total = _fusion["azure"] + _fusion["mediapipe"]
+    if total > 0:
+        _fusion["azure"] /= total
+        _fusion["mediapipe"] /= total
     return get_weights()
 
 

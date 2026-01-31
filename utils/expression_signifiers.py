@@ -2,22 +2,20 @@
 Expression Signifiers Module
 
 Implements 30 B2B-relevant facial expression signifiers from MediaPipe/Azure Face API
-landmarks and blendshape-derived features. Each signifier is scored 0-100. A composite
-engagement score (0-100) aggregates all 30 for the engagement bar.
+landmarks. Each signifier is scored 0-100. Psychology-informed weights and formulas
+(see docs/DOCUMENTATION.md §7).
 
 Groups:
-  1. Interest & Engagement (10): Duchenne, pupil dilation proxy, eyebrow flash, eye contact,
-     head tilt, forward lean, facial symmetry, rhythmic nodding, parted lips, softened forehead.
-  2. Cognitive Load (7): look up left/right, lip pucker, eye squint, thinking brow,
-     chin stroke (stub), stillness, lowered brow.
-  3. Resistance (9): contempt, nose crinkle, lip compression, eye block, jaw clench,
-     rapid blink, gaze aversion, no-nod, narrowed pupils (stub), mouth cover (stub).
-  4. Decision-Ready (3): relaxed exhale, fixed gaze, social-to-genuine smile.
+  1. Interest & Engagement (10): eye contact (strong), head tilt, nodding, Duchenne
+     (mouth-primary, squinch secondary), forward lean, parted lips, symmetry, etc.
+  2. Cognitive Load (7): look away, thinking brow, eye squint, lip pucker, stillness.
+  3. Resistance (9): gaze aversion (strong), lip compression, contempt, jaw clench, etc.
+  4. Decision-Ready (3): smile transition, fixed gaze, relaxed exhale.
 """
 
 import time
 from collections import deque
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from utils.face_detection_interface import FaceDetectionResult
 
@@ -266,7 +264,7 @@ class ExpressionSignifierEngine:
         fr = self._face_result
         shp = self._shape
         buf = list(self._buf)
-        if lm is None or shp is None or len(buf) < 2:
+        if lm is None or shp is None or len(buf) < 1:
             for k in self._all_keys():
                 out[k] = 0.0
             return out
@@ -318,6 +316,9 @@ class ExpressionSignifierEngine:
         # Scale: default/weak = 0, strong = 100 (map old 50 -> 0, 100 -> 100)
         for k in out:
             v = float(out[k])
+            if not np.isfinite(v):
+                out[k] = 0.0
+                continue
             scaled = (v - 50.0) * 2.0
             out[k] = max(0.0, min(100.0, scaled))
         return out
@@ -333,7 +334,84 @@ class ExpressionSignifierEngine:
             "g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition",
         ]
 
+    def get_group_means(self, scores: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+        """Return group means only (g1..g4). g3 is inverted (high = low resistance). No composite. Fast path for spike detection."""
+        if scores is None:
+            scores = self.get_all_scores()
+        keys = self._all_keys()
+        W = self._weights_provider() if self._weights_provider else {"signifier": [1.0] * 30, "group": [0.35, 0.15, 0.35, 0.15]}
+        sw = W.get("signifier", [1.0] * 30)
+        if len(sw) != 30:
+            sw = [1.0] * 30
+
+        def wmean(grp_keys: List[str]) -> float:
+            total_w, total_ws = 0.0, 0.0
+            for k in grp_keys:
+                if k not in scores:
+                    continue
+                i = keys.index(k) if k in keys else 0
+                wi = float(sw[i]) if i < len(sw) else 1.0
+                total_w += wi * float(scores[k])
+                total_ws += wi
+            if total_ws > 1e-9:
+                return total_w / total_ws
+            vals = [float(scores[k]) for k in grp_keys if k in scores]
+            return float(np.mean(vals)) if vals else 0.0
+
+        g1k = ["g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
+               "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead"]
+        g2k = ["g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
+               "g2_stillness", "g2_lowered_brow"]
+        g3k = ["g3_contempt", "g3_nose_crinkle", "g3_lip_compression", "g3_eye_block", "g3_jaw_clench",
+               "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover"]
+        g4k = ["g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition"]
+
+        g1 = wmean(g1k)
+        g2 = wmean(g2k)
+        g3_raw = wmean(g3k)
+        g3 = 100.0 - g3_raw
+        g4 = wmean(g4k)
+        return {"g1": g1, "g2": g2, "g3": g3, "g4": g4}
+
+    def _composite_from_group_means(self, g: Dict[str, float], gw: List[float]) -> float:
+        """
+        Composite engagement from group means. Psychology-informed adjustments:
+        - High interest+decision-ready (G1+G4): bonus (convergent positive signals)
+        - High resistance (G3_raw): penalty (contempt, gaze aversion, etc.)
+        """
+        composite_raw = gw[0] * g["g1"] + gw[1] * g["g2"] + gw[2] * g["g3"] + gw[3] * g["g4"]
+        if (g["g1"] + g["g4"]) / 2.0 > 62.0:
+            composite_raw = min(100.0, composite_raw + 8.0)
+        if (100.0 - g["g3"]) > 38.0:
+            composite_raw = max(0.0, composite_raw - 10.0)
+        return float(max(0.0, min(100.0, composite_raw)))
+
     def get_composite_score(self, scores: Optional[Dict[str, float]] = None) -> float:
+        if scores is None:
+            scores = self.get_all_scores()
+        keys = self._all_keys()
+        if all(float(scores.get(k, 0)) == 0.0 for k in keys):
+            return 0.0
+        W = self._weights_provider() if self._weights_provider else {"group": [0.35, 0.15, 0.35, 0.15]}
+        gw = W.get("group", [0.35, 0.15, 0.35, 0.15])
+        if len(gw) != 4:
+            gw = [0.35, 0.15, 0.35, 0.15]
+        g = self.get_group_means(scores)
+        return self._composite_from_group_means(g, gw)
+
+    def _get_composite_raw_for_breakdown(self, scores: Optional[Dict[str, float]], gw: List[float], g: Dict[str, float]) -> float:
+        composite_raw = gw[0] * g["g1"] + gw[1] * g["g2"] + gw[2] * g["g3"] + gw[3] * g["g4"]
+        if (g["g1"] + g["g4"]) / 2.0 > 62.0:
+            composite_raw = min(100.0, composite_raw + 8.0)
+        if (100.0 - g["g3"]) > 38.0:
+            composite_raw = max(0.0, composite_raw - 10.0)
+        return float(max(0.0, min(100.0, composite_raw)))
+
+    def get_composite_breakdown(self, scores: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """
+        Return a step-by-step breakdown of how the composite engagement score is calculated.
+        Used for frontend "How is the score calculated?" and transparency.
+        """
         if scores is None:
             scores = self.get_all_scores()
         keys = self._all_keys()
@@ -359,10 +437,6 @@ class ExpressionSignifierEngine:
                 return total_w / total_ws
             return float(np.mean([scores[k] for k in grp_keys if k in scores])) if grp_keys else 0.0
 
-        # When all metrics are 0 (e.g. no data), composite = 0
-        if all(float(scores.get(k, 0)) == 0.0 for k in keys):
-            return 0.0
-
         g1k = ["g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
                "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead"]
         g2k = ["g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
@@ -377,72 +451,73 @@ class ExpressionSignifierEngine:
         g3 = 100.0 - g3_raw_wmean
         g4 = weighted_mean(g4k)
 
-        composite = gw[0] * g1 + gw[1] * g2 + gw[2] * g3 + gw[3] * g4
-        # Composite is 0-100: 0 = no engagement, 100 = high (g3 already inverted so high g3 = low resistance)
-        return float(max(0.0, min(100.0, composite)))
+        composite_before = gw[0] * g1 + gw[1] * g2 + gw[2] * g3 + gw[3] * g4
+        adjustments: List[str] = []
+        composite_after = composite_before
+        if (g1 + g4) / 2.0 > 62.0:
+            composite_after = min(100.0, composite_after + 8.0)
+            adjustments.append("(G1+G4)/2 > 62: +8")
+        if g3_raw_wmean > 38.0:
+            composite_after = max(0.0, composite_after - 10.0)
+            adjustments.append("G3_raw > 38: -10")
+        score = float(max(0.0, min(100.0, composite_after)))
+
+        return {
+            "formula": "score = clip(G1*w1 + G2*w2 + G3*w3 + G4*w4 + adjustments, 0, 100)",
+            "groupWeights": {"G1": gw[0], "G2": gw[1], "G3": gw[2], "G4": gw[3]},
+            "groupMeans": {"G1": round(g1, 2), "G2": round(g2, 2), "G3_raw": round(g3_raw_wmean, 2), "G3": round(g3, 2), "G4": round(g4, 2)},
+            "compositeBeforeAdjustments": round(composite_before, 2),
+            "adjustments": adjustments if adjustments else ["none"],
+            "score": round(score, 1),
+            "signifierScores": {k: round(float(scores.get(k, 0)), 1) for k in keys if k in scores},
+        }
 
     # ----- Group 1 -----
     def _g1_duchenne(self, lm: np.ndarray, cur: dict, buf: list) -> float:
-        # Duchenne smile: genuine smile with eye squinch (crow's feet)
-        # Smile = mouth corners raised; Squinch = EAR reduction relative to baseline
+        """
+        Smile authenticity: mouth corner lift (primary) + optional eye squinch (secondary).
+        Modern research: eye constriction weakly predicts positive emotion; context-dependent.
+        Girard et al. (2021): prioritize mouth characteristics over squinch. Smile onset/
+        offset dynamics matter but we use static features; corner lift is most reliable.
+        """
         ear = cur.get("ear", 0.2)
         face_scale = cur.get("face_scale", 50.0)
         mouth_pts = _safe(lm, MOUTH)
         if len(mouth_pts) < 8:
             return 50.0
         
-        # Calculate smile intensity (gradual, more sensitive to small corner lift)
         ly = float(mouth_pts[0, 1])
         ry = float(mouth_pts[5, 1]) if mouth_pts.shape[0] > 5 else ly
         mid_y = float(np.mean(mouth_pts[:, 1]))
-        corner_lift = (mid_y - (ly + ry) / 2)  # Positive = corners up
-        smile_threshold = face_scale * 0.018  # Lower threshold: detect smaller smiles
-        smile_intensity = min(1.0, max(0.0, corner_lift / max(face_scale * 0.07, 1e-6)))  # Steeper: small lift -> higher intensity
+        corner_lift = (mid_y - (ly + ry) / 2)
+        smile_threshold = face_scale * 0.016
+        smile_intensity = min(1.0, max(0.0, corner_lift / max(face_scale * 0.065, 1e-6)))
         
-        # Calculate squinch: EAR reduction relative to baseline (wider band for sensitivity)
+        # Squinch: secondary signal (de-weighted per 2020s research)
         baseline_ear = self._baseline_ear if self._baseline_ear > 0 else 0.25
-        if baseline_ear <= 0:
-            return 50.0
-        ear_ratio = ear / baseline_ear
-        # Squinch: EAR 88-98% of baseline (sensitive to slight narrowing)
         squinch_intensity = 0.0
-        if 0.88 <= ear_ratio <= 0.98:
-            squinch_intensity = 1.0 - abs(ear_ratio - 0.93) / 0.10  # Peak at 0.93
-        elif ear_ratio < 0.88:
-            squinch_intensity = 0.5  # Too much squint, less genuine
+        if baseline_ear > 0:
+            ear_ratio = ear / baseline_ear
+            if 0.88 <= ear_ratio <= 0.98:
+                squinch_intensity = 0.6 * (1.0 - abs(ear_ratio - 0.93) / 0.10)
         
-        # Combine: Duchenne = smile + squinch (higher gain for small changes)
-        if corner_lift > smile_threshold and squinch_intensity > 0.25:
-            combined = 0.6 * smile_intensity + 0.4 * squinch_intensity
-            return 50.0 + combined * 52.0  # 50-102 -> clamp 100
-        elif corner_lift > smile_threshold:
-            return 50.0 + smile_intensity * 38.0  # 50-88
-        elif squinch_intensity > 0.25:
-            return 45.0 + squinch_intensity * 14.0  # 45-59
-        return 28.0 + min(1.0, corner_lift / max(face_scale * 0.04, 1e-6)) * 12.0  # Slight lift still scores 28-40
+        # Mouth corner lift is primary (70%); squinch adds modest boost (30%)
+        if corner_lift > smile_threshold:
+            combined = 0.70 * smile_intensity + 0.30 * squinch_intensity
+            return 50.0 + combined * 48.0
+        return 30.0 + min(1.0, corner_lift / max(face_scale * 0.04, 1e-6)) * 15.0
 
     def _g1_pupil_dilation(self, cur: dict) -> float:
-        # Proxy: eye area vs baseline (wider = higher)
-        # Exclude blinks and use temporal smoothing for stability
+        # Proxy: eye area vs baseline (wider = higher). No smoothing for real-time sensitivity.
         is_blink = cur.get("is_blink", 0.0)
         area = cur.get("eye_area", 0.0)
         base = max(1e-6, self._baseline_eye_area)
         
-        # During blinks, return last valid score (decay toward 0)
         if is_blink > 0.5:
-            smoothed = 0.96 * self._last_pupil_dilation_score + 0.04 * 0.0
-            self._last_pupil_dilation_score = smoothed
-            return float(smoothed)
+            self._last_pupil_dilation_score = 0.0
+            return 0.0
         
-        # Calculate ratio only when not blinking
         r = area / base if base > 0 else 1.0
-        
-        # Score: steeper bands so small ratio changes produce larger score changes
-        # r < 0.92: narrowed -> 0-38
-        # r 0.92-0.97: slightly narrow -> 38-46
-        # r 0.97-1.03: normal -> 46-54
-        # r 1.03-1.08: slightly wide -> 54-62
-        # r > 1.08: dilated -> 62-100
         if r >= 1.08:
             score = 62.0 + min(38.0, (r - 1.08) * 320.0)
         elif r >= 1.03:
@@ -456,18 +531,8 @@ class ExpressionSignifierEngine:
         else:
             score = max(0.0, 38.0 + (r - 0.92) * 380.0)
         
-        # Minimal smoothing: 92% current, 8% recent (low latency)
-        self._pupil_dilation_history.append(score)
-        if len(self._pupil_dilation_history) >= 2:
-            recent_avg = float(np.mean(list(self._pupil_dilation_history)[:-1]))
-            smoothed_score = 0.92 * score + 0.08 * recent_avg
-        else:
-            smoothed_score = score
-        
-        # Update last valid score
-        self._last_pupil_dilation_score = smoothed_score
-        
-        return float(max(0.0, min(100.0, smoothed_score)))
+        self._last_pupil_dilation_score = score
+        return float(max(0.0, min(100.0, score)))
 
     def _g1_eyebrow_flash(self, buf: list) -> float:
         # Eyebrow flash: rapid raise and return (shorter window, lower threshold for sensitivity)

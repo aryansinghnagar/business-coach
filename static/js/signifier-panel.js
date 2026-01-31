@@ -54,16 +54,15 @@ function getColorForScore(score) {
     return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
 
-/** EMA alpha for smooth bar updates (higher = more responsive, lower = smoother). */
-var SIGNIFIER_EMA_ALPHA = 0.32;
+/** Real-time metric display (no smoothing). */
 
 class SignifierPanel {
     constructor(options) {
         this.containerId = options.containerId || 'signifierPanelContainer';
         this.container = null;
         this.rows = {};
-        /** Per-signifier smoothed values (0–100) for fluid bar animation. */
-        this.smoothedValues = {};
+        /** Per-signifier raw values (0–100) for real-time display. */
+        this.rawValues = {};
     }
 
     init() {
@@ -138,17 +137,11 @@ class SignifierPanel {
             var v = scores[key];
             var raw = (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
             if (raw !== null) {
-                var prev = this.smoothedValues[key];
-                var smoothed = (prev != null)
-                    ? SIGNIFIER_EMA_ALPHA * raw + (1 - SIGNIFIER_EMA_ALPHA) * prev
-                    : raw;
-                this.smoothedValues[key] = smoothed;
-                var display = Math.max(0, Math.min(100, smoothed));
+                var display = Math.max(0, Math.min(100, raw));
                 r.fill.style.width = display + '%';
                 r.fill.style.background = getColorForScore(display);
                 r.value.textContent = Math.round(display);
             } else {
-                this.smoothedValues[key] = undefined;
                 r.fill.style.width = '0%';
                 r.value.textContent = '--';
             }
@@ -156,7 +149,7 @@ class SignifierPanel {
     }
 
     reset() {
-        this.smoothedValues = {};
+        this.rawValues = {};
         for (var key in this.rows) {
             var r = this.rows[key];
             r.fill.style.width = '0%';

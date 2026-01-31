@@ -1,14 +1,9 @@
 /**
  * Avatar Chat Manager Module
- * 
- * Manages avatar chat functionality including speech synthesis, streaming,
- * and interruption handling. Works in parallel with engagement detection.
- * 
- * Features:
- * - Streaming chat responses with interruption support
- * - Speech synthesis coordination
- * - Parallel operation with engagement detection
- * - Clean state management
+ *
+ * Manages avatar chat and TTS: streaming chat responses, speak() for insight alerts.
+ * Works in parallel with engagement detection. speak() uses avatarSynthesizer
+ * (Azure Speech) for SSML TTS; requires appConfig.sttTts.ttsVoice.
  */
 
 class AvatarChatManager {
@@ -265,9 +260,8 @@ class AvatarChatManager {
      * @param {number} endingSilenceMs - Optional ending silence in milliseconds
      */
     speak(text, endingSilenceMs = 0) {
-        if (!this.avatarSynthesizer || !text.trim() || this.isInterrupted) {
-            return;
-        }
+        if (!this.avatarSynthesizer || !text.trim() || this.isInterrupted) return;
+        if (!this.appConfig || !this.appConfig.sttTts || !this.appConfig.sttTts.ttsVoice) return;
         
         // Check if already speaking
         if (this.isSpeaking) {
