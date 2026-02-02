@@ -127,7 +127,7 @@ class VideoSourceHandler:
                     for index in (0, 1, 2):
                         try:
                             cap = cv2.VideoCapture(index, api)
-                            if cap.isOpened() and cap.read()[0]:
+                            if cap.isOpened():
                                 self.cap = cap
                                 break
                         except Exception:
@@ -135,8 +135,11 @@ class VideoSourceHandler:
                     if self.cap is not None:
                         break
                 if not self.cap or not self.cap.isOpened():
-                    self.cap = cv2.VideoCapture(0)
-                if self.cap.isOpened():
+                    try:
+                        self.cap = cv2.VideoCapture(0, cv2.CAP_ANY)
+                    except Exception:
+                        self.cap = cv2.VideoCapture(0)
+                if self.cap and self.cap.isOpened():
                     w, h = (640, 360) if lightweight else (1280, 720)
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)

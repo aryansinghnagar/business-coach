@@ -1383,6 +1383,7 @@
                     }
                     await sessionManager.startSession('partner', null, null);
                     showEngagementFeed();
+                    setEngagementHint('');
                     engagementDetector.startPartnerFrameStream(stream);
                     if (stream.getAudioTracks().length > 0) {
                         await startFeedAudioTranscript(stream);
@@ -1394,6 +1395,7 @@
                 if (sessionManager) {
                     await sessionManager.startSession(sourceType, finalSourcePath, null);
                     showEngagementFeed();
+                    setEngagementHint('');
                     console.log('Engagement detection started with source: ' + sourceType);
                 }
             } catch (error) {
@@ -1503,11 +1505,21 @@
         function handleVideoSourceCanceled() {
             console.log('Video source selection canceled');
             videoSourcePromptShown = true;
-            // Ensure engagement is running (e.g. if auto-start failed)
+            // Fallback: start with webcam so engagement runs
             if (sessionManager && engagementDetector && !engagementDetector.isActive) {
                 sessionManager.startSession('webcam', null, null)
-                    .then(function (ok) { if (ok) showEngagementFeed(); })
-                    .catch(function (err) { console.warn('Could not start engagement with webcam:', err); });
+                    .then(function (ok) {
+                        if (ok) {
+                            showEngagementFeed();
+                            setEngagementHint('');
+                        } else {
+                            setEngagementHint('Could not start. Click Change Video Source to retry.');
+                        }
+                    })
+                    .catch(function (err) {
+                        console.warn('Could not start engagement with webcam:', err);
+                        setEngagementHint('Could not connect. Click Change Video Source to retry.');
+                    });
             }
         }
 
@@ -2066,23 +2078,13 @@
         // Initialize systems and auto-start engagement with webcam so metrics work immediately.
         function onSystemsReady() {
             initializeSystems();
-            // Auto-start engagement with webcam so metrics populate without requiring modal interaction
-            if (sessionManager) {
-                sessionManager.startSession('webcam', null, null)
-                    .then(function (ok) {
-                        if (ok) {
-                            showEngagementFeed();
-                            console.log('Engagement detection auto-started with webcam');
-                        } else {
-                            setEngagementHint('Could not start. Click Change Video Source to retry.');
-                        }
-                    })
-                    .catch(function (err) {
-                        console.warn('Engagement auto-start error:', err);
-                        setEngagementHint('Could not connect. Ensure the server is running and click Change Video Source to retry.');
-                    });
+            // Show video source modal on first open so user selects webcam, partner, or file
+            if (videoSourceSelector && !videoSourcePromptShown) {
+                setTimeout(function () {
+                    promptVideoSourceSelection();
+                    setEngagementHint('Select a video source to see engagement metrics.');
+                }, 300);
             }
-            // Modal available via "Change Video Source" button; no auto-popup on load
         }
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', onSystemsReady);

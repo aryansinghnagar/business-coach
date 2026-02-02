@@ -2,6 +2,10 @@
 MediaPipe Face Detection Implementation
 
 This module provides a MediaPipe-based implementation of the FaceDetectorInterface.
+Uses multiple strategies for robust face detection:
+1. Primary: FaceMesh in tracking mode (fast, continuous)
+2. Fallback: FaceMesh in static mode (more reliable for new faces)
+3. Last resort: Simple face detection for bounding box
 """
 
 import cv2
@@ -17,29 +21,59 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
     MediaPipe-based face detector implementation.
     
     Uses MediaPipe Face Mesh to detect faces and extract 468 facial landmarks.
+    Includes fallback strategies for robust detection in various conditions.
     """
     
     def __init__(self, min_detection_confidence: float = 0.15, min_tracking_confidence: float = 0.15):
         """
-        Initialize MediaPipe face detector.
+        Initialize MediaPipe face detector with multiple detection strategies.
         
         Args:
-            min_detection_confidence: Minimum confidence for face detection (0-1). Lower (e.g. 0.15) helps in suboptimal lighting.
+            min_detection_confidence: Minimum confidence for face detection (0-1). Lower = more permissive.
             min_tracking_confidence: Minimum confidence for face tracking (0-1)
         """
+        # Use very low confidence for maximum permissiveness
+        self._det_conf = max(0.01, min(0.99, float(min_detection_confidence)))
+        self._track_conf = max(0.01, min(0.99, float(min_tracking_confidence)))
+        
         self.mp_face_mesh = mp.solutions.face_mesh
+        self.mp_face_detection = mp.solutions.face_detection
+        
+        # Primary: tracking mode for continuous video (fast)
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
             refine_landmarks=True,
-            min_detection_confidence=max(0.01, min(0.99, float(min_detection_confidence))),
-            min_tracking_confidence=max(0.01, min(0.99, float(min_tracking_confidence)))
+            min_detection_confidence=self._det_conf,
+            min_tracking_confidence=self._track_conf
         )
+        
+        # Fallback: static mode for when tracking fails (more reliable initial detection)
+        self.face_mesh_static = self.mp_face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.05,  # Very low for fallback
+            min_tracking_confidence=0.05
+        )
+        
+        # Last resort: simple face detection (just bounding box, no landmarks)
+        self.face_detection = self.mp_face_detection.FaceDetection(
+            model_selection=1,  # 1 = full range model (better for various distances)
+            min_detection_confidence=0.3
+        )
+        
+        self._consecutive_tracking_failures = 0
         self._available = True
     
     def detect_faces(self, image: np.ndarray) -> List[FaceDetectionResult]:
         """
-        Detect faces using MediaPipe.
+        Detect faces using MediaPipe with multiple fallback strategies.
+        
+        Strategy:
+        1. Try tracking mode (fast, works well once face is acquired)
+        2. If fails, try static mode (better for initial detection)
+        3. If still fails but simple detection finds a face, log for debugging
         
         Args:
             image: BGR image array
@@ -47,17 +81,42 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
         Returns:
             List of FaceDetectionResult objects
         """
-        # Convert BGR to RGB
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # Detect faces
-        results = self.face_mesh.process(rgb_image)
-        
-        if not results.multi_face_landmarks:
+        if image is None or image.size == 0:
             return []
         
-        face_results = []
+        # Convert BGR to RGB
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         height, width = image.shape[:2]
+        
+        # Strategy 1: Tracking mode (primary)
+        results = self.face_mesh.process(rgb_image)
+        if results.multi_face_landmarks:
+            self._consecutive_tracking_failures = 0
+            return self._extract_landmarks(results, width, height)
+        
+        # Strategy 2: Static mode fallback (more reliable for new/lost faces)
+        self._consecutive_tracking_failures += 1
+        results_static = self.face_mesh_static.process(rgb_image)
+        if results_static.multi_face_landmarks:
+            # Reset tracking failures since we found a face
+            self._consecutive_tracking_failures = 0
+            return self._extract_landmarks(results_static, width, height)
+        
+        # Strategy 3: Simple face detection (just to verify face exists)
+        # This helps diagnose if FaceMesh is the problem vs no face in frame
+        if self._consecutive_tracking_failures >= 5:
+            simple_results = self.face_detection.process(rgb_image)
+            if simple_results.detections:
+                # Face exists but FaceMesh can't get landmarks
+                # Try resetting the tracking-mode mesh
+                self._reset_tracking_mesh()
+                self._consecutive_tracking_failures = 0
+        
+        return []
+    
+    def _extract_landmarks(self, results, width: int, height: int) -> List[FaceDetectionResult]:
+        """Extract landmarks from MediaPipe FaceMesh results."""
+        face_results = []
         
         for face_landmarks in results.multi_face_landmarks:
             # Extract landmarks (468 points)
@@ -89,6 +148,20 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
         
         return face_results
     
+    def _reset_tracking_mesh(self) -> None:
+        """Reset the tracking-mode FaceMesh to re-initialize detection."""
+        try:
+            self.face_mesh.close()
+        except Exception:
+            pass
+        self.face_mesh = self.mp_face_mesh.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=self._det_conf,
+            min_tracking_confidence=self._track_conf
+        )
+    
     def is_available(self) -> bool:
         """Check if MediaPipe is available."""
         return self._available
@@ -100,4 +173,17 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
     def close(self) -> None:
         """Clean up MediaPipe resources."""
         if hasattr(self, 'face_mesh'):
-            self.face_mesh.close()
+            try:
+                self.face_mesh.close()
+            except Exception:
+                pass
+        if hasattr(self, 'face_mesh_static'):
+            try:
+                self.face_mesh_static.close()
+            except Exception:
+                pass
+        if hasattr(self, 'face_detection'):
+            try:
+                self.face_detection.close()
+            except Exception:
+                pass

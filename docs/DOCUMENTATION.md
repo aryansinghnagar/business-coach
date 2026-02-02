@@ -12,7 +12,7 @@ Single reference for setup, usage, architecture, APIs, engagement detection, and
 
 - **AI chat**: Azure OpenAI (GPT-4), streaming, optional On Your Data
 - **Meeting coach**: Real-time insights from engagement state and B2B cues
-- **Engagement detection**: Video analysis → 30 signifiers → 4 groups (G1–G4) → score (0–100), spike alerts, B2B opportunity detection
+- **Engagement detection**: Video analysis → 30 signifiers → 4 groups (G1–G4) → score (0–100), combination-based insights, B2B opportunity detection
 - **Audiovisual insights**: Visual spikes + phrase-triggered (partner STT) + 24 B2B opportunity features → popup + TTS
 - **Speech**: STT/TTS via Azure Speech; talking avatar with lip-sync (WebRTC)
 - **Video sources**: Webcam, Meeting Partner Video (share + audio), or file
@@ -147,7 +147,7 @@ Video frame → Face detection (MediaPipe or Azure)
   → 30 signifiers (0–100)
   → 4 group means G1–G4
   → Score: (G1+G4)/2 (MediaPipe) or composite (Azure/Unified)
-  → Spike detection + B2B opportunity detection
+  → Combination-based detection + B2B opportunity detection
   → Pending alert → GET /engagement/state → OpenAI insight → popup + TTS
 ```
 
@@ -234,9 +234,17 @@ Base URL: `http://localhost:5000` (default).
 
 Attention, eye contact, facial expressiveness, head movement, symmetry, mouth activity — derived from signifiers and (when used) Azure emotions.
 
-### Spike detection
+### Combination-based insight detection (not single spikes)
 
-Per group: current mean − min(recent) ≥ threshold and current ≥ min value; cooldown per group. When a spike fires, a **spike alert** is set; next `GET /engagement/state` triggers insight generation (OpenAI) and returns the message in `alert.message`.
+**Single-metric spikes are DISABLED** (`_enable_single_spike_alerts=False`). Instead, insights are triggered by **psychologically meaningful COMBINATIONS** of metrics:
+
+- **Decision-ready**: G4 high + G1 high + G3 low resistance (Cialdini: commitment signals)
+- **Cognitive overload**: G2 high + G1 low (Kahneman: System 2 maxed, decision fatigue)
+- **Aha moment**: G2 was high (processing) → G1 now high (insight landed)
+- **Skepticism**: G3 raw rising over time (nonverbal leakage, Mehrabian)
+- **Genuine interest**: G1 high + G3 low (Duchenne smile + forward lean + eye contact = approach motivation)
+
+**Composite-at-100** (legacy): When G1 (Interest), G4 (Decision-Ready), or overall composite score ≥ 90, a **composite_100 alert** is set. When any alert fires, next `GET /engagement/state` triggers insight generation (OpenAI) and returns the message in `alert.message`.
 
 ### B2B opportunity detection
 
@@ -257,7 +265,8 @@ Per group: current mean − min(recent) ≥ threshold and current ≥ min value;
 ### Psychology and metrics
 
 - Eye contact and head orientation proxy attention; mouth corner lift prioritized over eye squinch for smile authenticity; resistance cues (contempt, gaze aversion, lip compression) weighted; G2 (cognitive load) treated as meaningful in B2B (e.g. evaluating proposal).  
-- Details: signifier formulas in `utils/expression_signifiers.py`; weights in `utils/signifier_weights.py`; opportunity logic in `utils/b2b_opportunity_detector.py`.
+- **Metric math**: [docs/ENGAGEMENT_METRICS.md](ENGAGEMENT_METRICS.md) documents the mathematical logic for each of the 30 signifier metrics.  
+- Implementation: signifier formulas in `utils/expression_signifiers.py`; weights in `utils/signifier_weights.py`; opportunity logic in `utils/b2b_opportunity_detector.py`.
 
 ---
 

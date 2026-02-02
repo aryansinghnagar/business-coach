@@ -112,8 +112,8 @@ class EngagementStateDetector:
                              frame, and skip 100-feature extractor (for low-power devices).
         """
         self.lightweight_mode = bool(lightweight_mode)
-        default_conf = getattr(config, "MIN_FACE_CONFIDENCE", 0.15)
-        self._min_face_confidence = max(0.1, min(0.9, float(min_face_confidence or default_conf)))
+        default_conf = getattr(config, "MIN_FACE_CONFIDENCE", 0.05)
+        self._min_face_confidence = max(0.01, min(0.9, float(min_face_confidence or default_conf)))
         if self.lightweight_mode:
             detection_method = "mediapipe"
 
@@ -201,6 +201,7 @@ class EngagementStateDetector:
         self._spike_cooldown_sec: float = 45.0
         self._spike_delta_threshold: float = 22.0  # sudden rise above recent min
         self._spike_min_value: float = 42.0  # only fire if current group mean >= this
+        self._enable_single_spike_alerts: bool = False  # Disabled: use combinations instead
         
         # Threading and control
         self.detection_thread: Optional[threading.Thread] = None
@@ -217,6 +218,11 @@ class EngagementStateDetector:
         # Pending spike alert (popup message)
         self._pending_alert: Optional[dict] = None
         self._frame_count: int = 0
+        self._last_composite_100_time: float = 0.0
+        self._composite_100_cooldown_sec: float = 10.0
+        # Global buffer between insight popups (any type) to avoid overwhelming user
+        self._last_insight_popup_time: float = 0.0
+        self._insight_buffer_sec: float = 8.0
         
         # Stock messages for metric group spikes (B2B meeting context; overwritten by insight_generator when OpenAI succeeds)
         self._SPIKE_MESSAGES: dict = {
@@ -270,6 +276,7 @@ class EngagementStateDetector:
             q.clear()
         for k in self._last_spike_time:
             self._last_spike_time[k] = 0.0
+        self._last_composite_100_time = 0.0
         with self.lock:
             self._pending_alert = None
             self.current_state = None
@@ -480,8 +487,10 @@ class EngagementStateDetector:
             group_means = self.signifier_engine.get_group_means(signifier_scores)
             for k in ("g1", "g2", "g3", "g4"):
                 self._group_history[k].append(group_means[k])
-            self._check_spike_alerts(group_means, time.time())
-            self._check_opportunity_alerts(group_means, signifier_scores, time.time())
+            now = time.time()
+            self._check_composite_at_100(group_means, mediapipe_score, now)
+            self._check_spike_alerts(group_means, now)
+            self._check_opportunity_alerts(group_means, signifier_scores, now)
             azure_score = None
             if getattr(self, "_azure_detector_secondary", None) and self._get_all_azure_metrics:
                 try:
@@ -519,13 +528,16 @@ class EngagementStateDetector:
             self.signifier_engine.update(landmarks, face_result, frame.shape)
             signifier_scores = self.signifier_engine.get_all_scores()
             group_means = self.signifier_engine.get_group_means(signifier_scores)
+            composite_score = self.signifier_engine.get_composite_score(signifier_scores)
             g1, g4 = group_means["g1"], group_means["g4"]
             score = float((g1 + g4) / 2.0)
             metrics = self._metrics_from_signifiers(signifier_scores)
             for k in ("g1", "g2", "g3", "g4"):
                 self._group_history[k].append(group_means[k])
-            self._check_spike_alerts(group_means, time.time())
-            self._check_opportunity_alerts(group_means, signifier_scores, time.time())
+            now = time.time()
+            self._check_composite_at_100(group_means, composite_score, now)
+            self._check_spike_alerts(group_means, now)
+            self._check_opportunity_alerts(group_means, signifier_scores, now)
 
         if not np.isfinite(score) or score < 0 or score > 100:
             if is_azure and not is_unified:
@@ -608,14 +620,52 @@ class EngagementStateDetector:
             confidence=0.0
         )
     
+    def _check_composite_at_100(
+        self, group_means: dict, composite_score: float, now: float
+    ) -> None:
+        """
+        When composite metrics relevant to business meetings hit 100, trigger popup + speech.
+        G1 (Interest & Engagement) or G4 (Decision-Ready) or overall composite at 100.
+        """
+        with self.lock:
+            if self._pending_alert is not None:
+                return
+            if (now - self._last_composite_100_time) < self._composite_100_cooldown_sec:
+                return
+            g1 = group_means.get("g1", 0.0)
+            g4 = group_means.get("g4", 0.0)
+            triggered = False
+            group_hit = ""
+            # With binary metrics, group means are discrete (e.g. g4: 0,33,67,100)
+            if g1 >= 90.0:
+                triggered = True
+                group_hit = "g1"
+            elif g4 >= 90.0:
+                triggered = True
+                group_hit = "g4"
+            elif composite_score >= 90.0:
+                triggered = True
+                group_hit = "composite"
+            if triggered:
+                self._last_composite_100_time = now
+                self._pending_alert = {
+                    "type": "composite_100",
+                    "group": group_hit,
+                    "message": self._SPIKE_MESSAGES.get(
+                        group_hit if group_hit in ("g1", "g4") else "g1",
+                        "Strong engagement signal—consider acting on it.",
+                    ),
+                }
+
     def _check_spike_alerts(self, group_means: dict, now: float) -> None:
         """
         Detect sudden spike in any metric group (G1..G4) and set _pending_alert.
-        These spikes represent "moments" in the meeting (e.g. aha, confusion, resistance,
-        ready to close). The popup message is generated by Azure OpenAI in the API layer
-        using this visual cue plus optional speech transcript (see services/insight_generator).
-        Spike = current - min(recent) >= threshold and current >= min_value; cooldown per group.
+        DISABLED by default (_enable_single_spike_alerts=False): use combination-based
+        detection instead for more psychologically meaningful insights.
         """
+        if not self._enable_single_spike_alerts:
+            return  # Skip single-metric spikes; use combinations
+        
         with self.lock:
             if self._pending_alert is not None:
                 return
@@ -663,6 +713,24 @@ class EngagementStateDetector:
                     "message": "Opportunity detected—consider acting on it.",
                 }
     
+    def get_pending_alert(self) -> Optional[dict]:
+        """Peek at pending alert without clearing. Returns None if none."""
+        with self.lock:
+            return self._pending_alert
+    
+    def clear_pending_alert(self) -> None:
+        """Clear pending alert."""
+        with self.lock:
+            self._pending_alert = None
+    
+    def can_show_insight(self) -> bool:
+        """True if enough time has passed since last insight popup."""
+        return (time.time() - self._last_insight_popup_time) >= self._insight_buffer_sec
+    
+    def record_insight_shown(self) -> None:
+        """Call when an insight popup was shown (any type)."""
+        self._last_insight_popup_time = time.time()
+
     def get_and_clear_pending_alert(self) -> Optional[dict]:
         """Thread-safe get and clear of pending alert. Returns None if none."""
         with self.lock:

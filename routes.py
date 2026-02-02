@@ -16,6 +16,7 @@ from services.insight_generator import (
     generate_insight_for_opportunity,
     generate_insight_for_spike,
     get_and_clear_pending_aural_alert,
+    get_pending_aural_alert,
     get_recent_transcript,
     _check_for_trigger_phrases,
     _set_pending_aural_alert,
@@ -884,46 +885,61 @@ def get_engagement_state():
         }
         
         # Include alert if present (spike or phrase-triggered); consumed on first return.
+        # Global buffer between popups to avoid overwhelming user.
         m = response_data.get("metrics") or {}
         metrics_summary = {
             "attention": m.get("attention"),
             "eyeContact": m.get("eyeContact"),
             "facialExpressiveness": m.get("facialExpressiveness"),
         }
-        alert = engagement_detector.get_and_clear_pending_alert()
-        if alert and alert.get("type") == "spike":
-            try:
-                generated = generate_insight_for_spike(
-                    group=alert.get("group", "g1"),
-                    metrics_summary=metrics_summary,
-                    recent_transcript=get_recent_transcript(),
-                )
-                alert = dict(alert)
-                alert["message"] = (generated or "").strip() or alert.get("message", "Notable change in engagement.")
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning("Insight generation failed: %s", e)
-        elif alert and alert.get("type") == "opportunity":
-            try:
-                generated = generate_insight_for_opportunity(
-                    opportunity_id=alert.get("opportunity_id", ""),
-                    context=alert.get("context"),
-                    metrics_summary=metrics_summary,
-                    recent_transcript=get_recent_transcript(),
-                )
-                alert = dict(alert)
-                alert["message"] = (generated or "").strip() or alert.get("message", "Opportunity detected—consider acting on it.")
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning("Opportunity insight generation failed: %s", e)
+        engagement_alert = engagement_detector.get_pending_alert()
+        if engagement_alert:
+            alert = engagement_alert
+            from_engagement = True
         else:
-            # Check for phrase-triggered (aural) alert
-            aural = get_and_clear_pending_aural_alert()
-            if aural and aural.get("type") == "aural":
+            aural = get_pending_aural_alert()
+            alert = aural
+            from_engagement = False
+        if alert and not engagement_detector.can_show_insight():
+            alert = None
+            from_engagement = False
+        if alert:
+            if from_engagement:
+                engagement_detector.clear_pending_alert()
+                if alert.get("type") in ("spike", "composite_100"):
+                    try:
+                        grp = alert.get("group", "g1")
+                        if grp == "composite":
+                            grp = "g1"
+                        generated = generate_insight_for_spike(
+                            group=grp,
+                            metrics_summary=metrics_summary,
+                            recent_transcript=get_recent_transcript(),
+                        )
+                        alert = dict(alert)
+                        alert["message"] = (generated or "").strip() or alert.get("message", "Notable change in engagement.")
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Insight generation failed: %s", e)
+                elif alert.get("type") == "opportunity":
+                    try:
+                        generated = generate_insight_for_opportunity(
+                            opportunity_id=alert.get("opportunity_id", ""),
+                            context=alert.get("context"),
+                            metrics_summary=metrics_summary,
+                            recent_transcript=get_recent_transcript(),
+                        )
+                        alert = dict(alert)
+                        alert["message"] = (generated or "").strip() or alert.get("message", "Opportunity detected—consider acting on it.")
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning("Opportunity insight generation failed: %s", e)
+            else:
+                get_and_clear_pending_aural_alert()
                 try:
                     generated = generate_insight_for_aural_trigger(
-                        category=aural.get("category", "interest"),
-                        phrase=aural.get("phrase", ""),
+                        category=alert.get("category", "interest"),
+                        phrase=alert.get("phrase", ""),
                         metrics_summary=metrics_summary,
                     )
                     alert = {"type": "aural", "message": (generated or "").strip() or "Notable comment—consider responding."}
@@ -931,7 +947,7 @@ def get_engagement_state():
                     import logging
                     logging.getLogger(__name__).warning("Aural insight generation failed: %s", e)
                     alert = {"type": "aural", "message": "They said something noteworthy—consider acknowledging their point."}
-        if alert:
+            engagement_detector.record_insight_shown()
             response_data["alert"] = alert
         
         # Add cache control headers to ensure fresh data

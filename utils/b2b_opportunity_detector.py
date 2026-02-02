@@ -1,10 +1,12 @@
 """
-B2B Opportunity Detector — Complex features from engagement metrics
+B2B Opportunity Detector — Psychology-based metric combinations
 
-Derives 20+ psychology-based opportunity features from the 30 signifiers and 4 group means
-to predict engagement state and detect B2B-relevant moments in real time. Used to trigger
-custom popup + TTS via Azure OpenAI (e.g. alleviate cognitive load, address skepticism,
-finalize a deal).
+Detects psychologically meaningful COMBINATIONS of engagement metrics (not single spikes)
+to predict engagement state and trigger insights. Based on cutting-edge research:
+- Duchenne smile + forward lean + eye contact = genuine interest (approach motivation)
+- High G2 + low G1 + gaze aversion = cognitive overload (Kahneman System 2 maxed)
+- G3 spike + G1 drop = resistance surfacing (approach-avoidance conflict)
+- G1 + G4 high, G2/G3 low = decision-ready (commitment signals, low cognitive load)
 
 Opportunities are evaluated in priority order; the first that fires (and passes cooldown)
 is returned. All thresholds use the 0–100 scale (G1, G2, G3, G4; G3 = 100 - resistance_raw).
@@ -86,14 +88,26 @@ def _eval_closing_window(g1: float, g2: float, g3: float, g4: float, hist: Dict[
 
 
 def _eval_decision_ready(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Decision-ready = high commitment signals (G4) + positive engagement (G1) + 
+    low resistance (G3 high). Cialdini's commitment/consistency: once nonverbal yes, primed to act.
+    """
     return g4 >= 62 and g1 >= 56 and g3 >= 58
 
 
 def _eval_ready_to_sign(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Ready to sign = high commitment (G4) + LOW cognitive load (G2 < 50) + 
+    low resistance. Decision made, no internal conflict. Kahneman: System 1 (intuitive) yes.
+    """
     return g4 >= 65 and g2 < 50 and g3 >= 56
 
 
 def _eval_buying_signal(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Buying signal = high interest (G1) + decision cues (G4) + low resistance.
+    Approach motivation (Riskind & Gotay): forward lean, Duchenne smile, eye contact = desire.
+    """
     return g1 >= 60 and g4 >= 52 and g3 >= 58
 
 
@@ -104,19 +118,35 @@ def _eval_commitment_cue(g1: float, g2: float, g3: float, g4: float, hist: Dict[
 
 
 def _eval_cognitive_overload_risk(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Cognitive overload = high G2 (furrowed brow, gaze aversion, stillness) + 
+    LOW G1 (not engaged). Kahneman's System 2 maxed out. Decision fatigue risk.
+    """
     return g2 >= 58 and g1 < 52
 
 
 def _eval_confusion_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Confusion = high cognitive load (G2) + resistance surfacing (G3 raw high) OR
+    sudden G2 spike. AU4 (furrowed brow) communicates "problem understanding" (2025 research).
+    """
     r = _g3_raw(g3)
     return g2 >= 58 and (r >= 48 or (len(hist["g2"]) >= 4 and g2 > np.mean(hist["g2"][:-2])))
 
 
 def _eval_need_clarity(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Need clarity = moderate cognitive load (G2) + low engagement (G1).
+    Processing but not connecting. Requires simplification or recap.
+    """
     return g2 >= 55 and g1 < 56
 
 
 def _eval_skepticism_surface(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Skepticism = resistance (G3 raw) RISING over time. Asymmetric expressions
+    (contempt), lip compression, nose wrinkle. Mehrabian: nonverbal leakage reveals true sentiment.
+    """
     r = _g3_raw(g3)
     if len(hist["g3"]) < 4:
         return r >= 50
@@ -126,18 +156,34 @@ def _eval_skepticism_surface(g1: float, g2: float, g3: float, g4: float, hist: D
 
 
 def _eval_objection_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Objection = moderate-high resistance (G3 raw). Requires validation before
+    persuasion (Rogers). Resistance drops when they feel heard.
+    """
     return _g3_raw(g3) >= 52
 
 
 def _eval_resistance_peak(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Resistance peak = high G3 raw (contempt, lip compression, gaze aversion).
+    Approach-avoidance conflict. Don't push—acknowledge and pivot.
+    """
     return _g3_raw(g3) >= 56
 
 
 def _eval_hesitation_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Hesitation = moderate cognitive load (G2) + moderate resistance (G3 raw).
+    On the fence. Lower stakes or address concern.
+    """
     return g2 >= 54 and _g3_raw(g3) >= 46
 
 
 def _eval_disengagement_risk(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Disengagement = LOW interest (G1) + moderate resistance (G3 raw).
+    Attention slipping. Re-engage with question or shift topic.
+    """
     return g1 < 46 and _g3_raw(g3) >= 48
 
 
@@ -149,6 +195,10 @@ def _eval_objection_fading(g1: float, g2: float, g3: float, g4: float, hist: Dic
 
 
 def _eval_aha_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Aha moment = WAS processing (G2 high recently) -> NOW engaged (G1 high).
+    Insight just landed. Eyes widen, brows raise, genuine smile. Capitalize immediately.
+    """
     if len(hist["g1"]) < 3 or len(hist["g2"]) < 3:
         return False
     g2_ago = hist["g2"][-2]
@@ -156,18 +206,30 @@ def _eval_aha_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str,
 
 
 def _eval_re_engagement_opportunity(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Re-engagement = WAS disengaged (G1 low) -> NOW attention returning (G1 rising).
+    Strike while attention is refocused. Ask question or deliver key point.
+    """
     if len(hist["g1"]) < 6:
         return False
     return min(hist["g1"]) < 45 and g1 >= 50
 
 
 def _eval_alignment_cue(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Alignment = BOTH interest (G1) AND commitment (G4) rising together over time.
+    Nodding, mirroring, warm eye contact. Shared goals emerging. Propose next step.
+    """
     if len(hist["g1"]) < 6 or len(hist["g4"]) < 6:
         return False
     return (g1 - hist["g1"][0]) >= 10 and (g4 - hist["g4"][0]) >= 10
 
 
 def _eval_genuine_interest(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """
+    Psychology: Genuine interest = high G1 (Duchenne smile, forward lean, eye contact) + 
+    low resistance (G3 high). Authentic engagement markers. Approach motivation.
+    """
     return g1 >= 58 and g3 >= 56
 
 

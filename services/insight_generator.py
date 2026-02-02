@@ -90,6 +90,12 @@ def _set_pending_aural_alert(category: str, phrase: str) -> bool:
         return True
 
 
+def get_pending_aural_alert() -> Optional[dict]:
+    """Peek at pending aural alert without clearing."""
+    with _aural_alert_lock:
+        return _pending_aural_alert
+
+
 def get_and_clear_pending_aural_alert() -> Optional[dict]:
     """Thread-safe get and clear of pending aural alert."""
     global _pending_aural_alert
@@ -142,60 +148,191 @@ def clear_transcript() -> None:
 
 
 # -----------------------------------------------------------------------------
-# Group descriptions for prompt (visual cue context) — B2B meeting focus
+# Group descriptions for prompt (visual cue context) — Psychology-grounded
 # -----------------------------------------------------------------------------
+# Each description ties the metric group to specific facial action units (FACS),
+# psychology research, and observable cues for more grounded insights.
 GROUP_DESCRIPTIONS = {
-    "g1": "Interest & engagement (e.g. stronger attention, positive facial cues—buying signals)",
-    "g2": "Cognitive load (e.g. thinking hard, processing information—e.g. evaluating proposal)",
-    "g3": "Resistance or discomfort (e.g. skepticism, objections, unease)",
-    "g4": "Decision-ready (e.g. ready to commit, closing signals—ready to say yes or next step)",
+    "g1": (
+        "Interest & Engagement — You're seeing signs like genuine (Duchenne) smiling (orbicularis oculi + "
+        "zygomaticus major), head tilt toward the speaker (active listening posture), sustained eye contact, "
+        "eyebrow raises (surprise/interest), and forward lean. These are classic buying signals in sales "
+        "psychology—approach motivation, curiosity, and social bonding. Per Ekman's FACS, AU6 (cheek raise) + "
+        "AU12 (lip corner pull) = authentic positive affect. The partner is emotionally available and receptive."
+    ),
+    "g2": (
+        "Cognitive Load — You're seeing signs like furrowed brow (AU4, corrugator supercilii = effortful thinking), "
+        "reduced blinking (deep focus), slight lip compression (processing), gaze aversion (internal processing), "
+        "and stillness (cognitive bandwidth consumed). Per Kahneman's System 2, they're engaging in deliberate, "
+        "effortful thought—evaluating your proposal, comparing options, or working through complexity. Too much "
+        "load risks decision fatigue and disengagement."
+    ),
+    "g3": (
+        "Resistance & Discomfort — You're seeing signs like asymmetric expressions (e.g. one-sided lip pull = "
+        "contempt/skepticism), compressed lips (AU23/24 = suppressed disagreement), nose wrinkle (AU9 = disgust/ "
+        "distaste), gaze aversion (avoidance), and reduced facial expressiveness (guarded). These are distancing "
+        "signals—approach-avoidance conflict, skepticism, or unresolved objections. Per Mehrabian's research, "
+        "nonverbal leakage reveals true sentiment even when words are polite."
+    ),
+    "g4": (
+        "Decision-Ready — You're seeing signs like sustained eye contact (commitment, trust), relaxed facial "
+        "muscles (tension release = decision made), genuine smile, forward lean, and nodding (agreement cues). "
+        "These are closing signals—they've resolved internal conflict and are ready to act. Per Cialdini's "
+        "commitment/consistency principle, once they signal yes nonverbally, they're primed to follow through. "
+        "This is the window to ask for commitment or next step."
+    ),
 }
 
-# Stock fallbacks if OpenAI fails or times out — B2B meeting context
+# Stock fallbacks if OpenAI fails or times out — Psychology-grounded
 STOCK_MESSAGES = {
-    "g1": "They're showing stronger interest—good moment to deepen the value proposition or ask for their view.",
-    "g2": "They look like they're thinking hard—consider pausing or clarifying to avoid overload before your next ask.",
-    "g3": "Signs of resistance or discomfort—try acknowledging concerns, addressing objections, or shifting approach.",
-    "g4": "They appear ready to decide—offer a clear next step or ask for commitment.",
+    "g1": (
+        "Their face just lit up—genuine smile, eyes engaged. That's authentic interest, not politeness. "
+        "Lean in: ask what's resonating or go deeper on that point."
+    ),
+    "g2": (
+        "Furrowed brow, stillness, gaze turning inward—they're processing hard. Give them a beat. "
+        "Too much now risks overload. Pause, then ask what's on their mind."
+    ),
+    "g3": (
+        "Tension in the face—compressed lips, maybe a slight pull. Something's not sitting right. "
+        "Acknowledge it directly: 'I'm sensing some hesitation—what's your concern?'"
+    ),
+    "g4": (
+        "Relaxed face, steady eye contact, slight nod—they've made up their mind. "
+        "This is your window. Offer a clear next step or ask for the commitment."
+    ),
 }
 
-# Stock fallbacks for phrase-triggered (aural) insights
+# Stock fallbacks for phrase-triggered (aural) insights — Psychology-grounded
 AURAL_STOCK_MESSAGES = {
-    "objection": "They raised an objection—acknowledge it directly and offer to address their concern before moving on.",
-    "interest": "They expressed interest—capitalize on this moment to deepen the discussion or ask for their perspective.",
-    "confusion": "They seem confused—pause and clarify before proceeding; check for understanding.",
-    "commitment": "They're signaling commitment—offer a clear next step or ask for a concrete yes.",
-    "concern": "They voiced a concern—acknowledge it and explore what would help them feel comfortable.",
-    "timeline": "They're asking about timing—provide clarity on milestones or next steps.",
-    "budget": "Budget or pricing came up—address it directly and link value to their investment.",
+    "objection": (
+        "They just pushed back. That's not a no—it's a request for more information. "
+        "Validate first: 'That's a fair point.' Then address the concern directly. Resistance drops when they feel heard."
+    ),
+    "interest": (
+        "They're leaning in verbally—'that's interesting' or 'tell me more' is an invitation. "
+        "This is curiosity signaling. Go deeper, or ask what specifically caught their attention."
+    ),
+    "confusion": (
+        "They're lost—their words just told you. Cognitive load is spiking. "
+        "Stop adding information. Simplify, recap, or ask 'What would help clarify this?'"
+    ),
+    "commitment": (
+        "They just signaled readiness—'let's do it,' 'next steps,' or similar. That's commitment language. "
+        "Don't oversell. Lock it in: confirm the next step and timeline."
+    ),
+    "concern": (
+        "They voiced a worry. Underneath it is a need—security, clarity, or control. "
+        "Name it: 'It sounds like you want to make sure...' Then address it directly."
+    ),
+    "timeline": (
+        "Timing matters to them right now. They're mentally mapping this to their calendar and priorities. "
+        "Be specific: give dates, milestones, or ask what timeline works for them."
+    ),
+    "budget": (
+        "Money's on their mind. That's not necessarily a blocker—it's a value question. "
+        "Reframe cost as investment. Tie it to outcomes they care about."
+    ),
 }
 
-# Fallbacks for B2B opportunity-triggered insights (visual/temporal cues)
+# Fallbacks for B2B opportunity-triggered insights (visual/temporal cues) — Psychology-grounded
 OPPORTUNITY_STOCK_MESSAGES = {
-    "closing_window": "They're in a closing window—offer a clear next step or ask for commitment now.",
-    "decision_ready": "They appear decision-ready—present options or ask for a concrete yes.",
-    "ready_to_sign": "Signals suggest readiness to move forward—propose the next step or close.",
-    "buying_signal": "Strong buying signal—deepen value and ask for their view or commitment.",
-    "commitment_cue": "Commitment cues detected—offer a clear next step or ask for agreement.",
-    "cognitive_overload_risk": "Cognitive overload risk—pause, simplify, or recap before adding more.",
-    "confusion_moment": "Confusion detected—clarify and check understanding before continuing.",
-    "need_clarity": "They may need clarity—pause and summarize or ask what to clarify.",
-    "skepticism_surface": "Skepticism surfacing—address concerns directly and offer evidence or reassurance.",
-    "objection_moment": "Objection moment—acknowledge and address their concern before moving on.",
-    "resistance_peak": "Resistance is high—acknowledge their view and pivot or reframe.",
-    "hesitation_moment": "Hesitation detected—offer reassurance or a smaller commitment step.",
-    "disengagement_risk": "Disengagement risk—re-engage with a question or shift of topic.",
-    "objection_fading": "Objections fading—gently reinforce value and suggest next step.",
-    "aha_moment": "Aha moment—capitalize on this insight and tie it to your proposal.",
-    "re_engagement_opportunity": "Re-engagement opportunity—ask a direct question or invite their input.",
-    "alignment_cue": "Alignment cues—reinforce shared goals and propose next step.",
-    "genuine_interest": "Genuine interest—go deeper on value and ask for their perspective.",
-    "listening_active": "They're actively listening—deliver your key point and ask for reaction.",
-    "trust_building_moment": "Trust-building moment—be transparent and invite their concerns.",
-    "urgency_sensitive": "They're sensitive to urgency—offer a clear timeline or next step.",
-    "processing_deep": "They're processing deeply—pause briefly then reinforce one key point.",
-    "attention_peak": "Attention is high—deliver your most important message now.",
-    "rapport_moment": "Rapport moment—strengthen connection then steer toward outcome.",
+    "closing_window": (
+        "Their face has settled—tension released, eyes steady. Decision's made internally. "
+        "This window closes fast. Ask for the commitment or next step now."
+    ),
+    "decision_ready": (
+        "Relaxed brow, sustained gaze, maybe a slight nod. They've resolved the internal debate. "
+        "Don't add more; ask: 'Does this work for you?' or 'What do you need to move forward?'"
+    ),
+    "ready_to_sign": (
+        "All the signals say yes—genuine smile, forward lean, open posture. They're waiting for you to close. "
+        "Propose the next step clearly and confidently."
+    ),
+    "buying_signal": (
+        "Duchenne smile, raised brows, engaged eyes—classic approach signals. They like what they're hearing. "
+        "Go deeper: 'What's resonating most?' or reinforce the value that sparked this."
+    ),
+    "commitment_cue": (
+        "Nodding, eye contact, relaxed face—these are agreement signals. "
+        "Cement it: summarize what you've agreed and ask for confirmation."
+    ),
+    "cognitive_overload_risk": (
+        "Furrowed brow, gaze aversion, stillness—System 2 is maxed out. "
+        "Stop adding. Pause, simplify, or ask: 'What's the most important thing to clarify?'"
+    ),
+    "confusion_moment": (
+        "Their face just flickered—brow furrow, slight squint. Processing hit a wall. "
+        "Don't push forward. Ask: 'What would help clarify this?' or recap the key point."
+    ),
+    "need_clarity": (
+        "Subtle signs of uncertainty—gaze shifting, slight tension. They need something to land. "
+        "Pause and summarize, or ask directly: 'What's unclear?'"
+    ),
+    "skepticism_surface": (
+        "Asymmetric lip pull, narrowed eyes—that's skepticism leaking through. "
+        "Name it: 'You look unconvinced—what's your concern?' Address it head-on."
+    ),
+    "objection_moment": (
+        "Tension in the face, maybe compressed lips. An objection is brewing. "
+        "Preempt it: 'I'm sensing something—what's on your mind?' Let them voice it."
+    ),
+    "resistance_peak": (
+        "Face is tight, gaze averted, posture pulling back. Resistance is high. "
+        "Don't push. Acknowledge: 'This might not feel right yet. What would help?'"
+    ),
+    "hesitation_moment": (
+        "Micro-tension, slight freeze—they're on the fence. "
+        "Lower the stakes: offer a smaller step, or ask what's holding them back."
+    ),
+    "disengagement_risk": (
+        "Gaze drifting, face going flat. Attention is slipping away. "
+        "Re-engage now: ask a direct question or shift to something that matters to them."
+    ),
+    "objection_fading": (
+        "Tension is easing, face softening. The objection is losing steam. "
+        "Don't reargue it. Gently reinforce value and suggest the next step."
+    ),
+    "aha_moment": (
+        "Eyes widened, brows lifted, genuine smile—that's insight landing. They just 'got it.' "
+        "Capitalize: 'It sounds like this clicked—how does it fit with what you need?'"
+    ),
+    "re_engagement_opportunity": (
+        "They were drifting, but something just caught their attention—slight head turn, eyes refocused. "
+        "Strike now: ask for their input or deliver your key point."
+    ),
+    "alignment_cue": (
+        "Nodding, sustained eye contact, relaxed face—they're with you. "
+        "Reinforce shared goals: 'So we're on the same page that...' and propose next step."
+    ),
+    "genuine_interest": (
+        "Authentic engagement—Duchenne markers, forward lean, active eye contact. "
+        "This is real curiosity. Go deeper or ask: 'What's most interesting to you?'"
+    ),
+    "listening_active": (
+        "Eyes locked, body still, face open—they're absorbing every word. "
+        "This is your moment. Deliver your most important point and pause for reaction."
+    ),
+    "trust_building_moment": (
+        "Face is open, gaze steady, slight nod. Trust is forming. "
+        "Be transparent—acknowledge a limitation or invite their concerns. Authenticity deepens this."
+    ),
+    "urgency_sensitive": (
+        "They're asking about timing, face is alert. Urgency is on their mind. "
+        "Be specific: give clear dates or ask what timeline works for them."
+    ),
+    "processing_deep": (
+        "Stillness, gaze inward, brow slightly furrowed—deep processing mode. "
+        "Give them space. Then reinforce one key point that matters most."
+    ),
+    "attention_peak": (
+        "Eyes wide, face engaged, body oriented toward you. Attention is maxed out. "
+        "Deliver your most important message right now. Don't dilute it."
+    ),
+    "rapport_moment": (
+        "Genuine smile, mirroring your posture, warm eye contact. Rapport is high. "
+        "Leverage it—strengthen the connection, then steer toward the outcome you want."
+    ),
 }
 
 
@@ -228,25 +365,51 @@ def generate_insight_for_spike(
     transcript_snippet = transcript[-800:] if len(transcript) > 800 else transcript  # last 800 chars
 
     system = (
-        "You are an expert B2B meeting coach observing the meeting in real time. You've just noticed a shift in the "
-        "meeting partner's expression (client, prospect, or stakeholder)—a moment that signals interest, cognitive "
-        "load/confusion, resistance, or decision-readiness. You're about to pass a quick note to the host. What do "
-        "you say?\n\n"
-        "Say one to three short lines—the kind of thing you'd whisper to someone sitting next to you. Natural, "
-        "conversational, specific to what you're seeing and the business context. Make it actionable so they know "
-        "the next step. No preamble, no 'You should' or 'Consider.' Do not use the term B2B. Keep it concise—"
-        "2–3 lines max, nothing overwhelming. If you have recent speech from the partner, weave it in—e.g. they "
-        "said 'I'm not sure' and you're seeing confusion, so you might say to pause and clarify. Draw on psychology: "
-        "cognitive load research, emotional contagion, trust signals. Sound like a real person who cares, not a script."
+        "You are an expert meeting coach trained in nonverbal communication, FACS (Facial Action Coding System), "
+        "and behavioral psychology. You're observing a meeting in real time—watching the partner's face and listening "
+        "to their words. You just noticed a significant shift in their facial expression that reveals their internal state.\n\n"
+        "Your job: pass a quick, insightful note to the host—the kind of thing a trusted advisor would whisper. "
+        "Ground your insight in what you're *actually observing*:\n"
+        "- For interest/engagement: mention genuine smiling (AU6+AU12), raised brows, head tilt, eye contact\n"
+        "- For cognitive load: mention furrowed brow (AU4), reduced blinking, gaze aversion, stillness\n"
+        "- For resistance: mention lip compression (AU23/24), asymmetric expressions, nose wrinkle (AU9), guarded face\n"
+        "- For decision-ready: mention relaxed face, tension release, sustained eye contact, nodding\n\n"
+        "Connect the observed cue to psychology: Kahneman's System 1/2, Ekman's microexpressions, approach/avoidance "
+        "motivation, cognitive load theory, trust signals from Cialdini. If there's speech context, weave it in—"
+        "e.g. if they said 'I'm not sure' and you see confusion, suggest clarifying.\n\n"
+        "Rules:\n"
+        "- 1-3 short lines, conversational tone, no preamble\n"
+        "- Be specific: describe what you're seeing ('their brow just furrowed,' 'that's a genuine smile')\n"
+        "- Make it actionable: tell them what to do next\n"
+        "- Do not use 'B2B' or jargon\n"
+        "- Sound like a real person who genuinely cares about their success"
     )
     user_parts = [
-        f"In this meeting, the meeting partner (client/prospect) just showed a sudden shift in: {desc}.",
+        f"FACIAL CUES DETECTED: {desc}",
     ]
     if metrics_summary:
-        user_parts.append(f"What you're seeing in the room: {metrics_summary}.")
+        # Add specific metric context for more grounded insights
+        attn = metrics_summary.get("attention")
+        eye = metrics_summary.get("eyeContact")
+        expr = metrics_summary.get("facialExpressiveness")
+        cues = []
+        if attn is not None and attn > 70:
+            cues.append("high attention (focused gaze, minimal distraction)")
+        elif attn is not None and attn < 30:
+            cues.append("low attention (gaze drifting, distracted)")
+        if eye is not None and eye > 70:
+            cues.append("strong eye contact (engaged, present)")
+        elif eye is not None and eye < 30:
+            cues.append("weak eye contact (avoidant or processing internally)")
+        if expr is not None and expr > 70:
+            cues.append("high expressiveness (emotional engagement visible)")
+        elif expr is not None and expr < 30:
+            cues.append("low expressiveness (guarded or flat affect)")
+        if cues:
+            user_parts.append(f"Additional cues: {'; '.join(cues)}.")
     if transcript_snippet:
-        user_parts.append(f"Recent speech from partner: \"{transcript_snippet}\".")
-    user_parts.append("What would you say to the host right now? One to three short lines.")
+        user_parts.append(f"SPEECH CONTEXT (what partner just said): \"{transcript_snippet}\"")
+    user_parts.append("What would you whisper to the host right now? Be specific about what you're seeing.")
 
     user_content = " ".join(user_parts)
     messages = [{"role": "user", "content": user_content}]
@@ -282,25 +445,62 @@ def generate_insight_for_aural_trigger(
     transcript_snippet = transcript[-600:] if len(transcript) > 600 else transcript
 
     system = (
-        "You are an expert B2B meeting coach observing the meeting in real time. The meeting partner (client, "
-        "prospect, or stakeholder) just said something that caught your attention—an objection, expression of "
-        "interest, confusion, commitment, concern, timeline, or budget. You're about to pass a quick note to the "
-        "host. What do you say?\n\n"
-        "Say one to three short lines—the kind of thing you'd whisper to someone next to you. Weave in the "
-        "conversation context so it feels tailored, not generic. Be specific to business meetings. Make it actionable. "
-        "Do not use the term B2B. Keep it concise—2–3 lines max, nothing overwhelming. If you know how engaged "
-        "they seem (e.g. they're checked out but raised an objection—acknowledge first, then address; they're "
-        "leaning in with interest—capitalize on momentum), factor that in. Draw on psychology: validation before "
-        "persuasion, cognitive load, trust-building. Sound like a real person who cares, not a script."
+        "You are an expert meeting coach trained in verbal and nonverbal communication, behavioral psychology, and "
+        "persuasion science. You're observing a meeting in real time—listening to the partner's words and watching "
+        "their face. They just said something significant that reveals their state: an objection, expression of "
+        "interest, confusion, commitment signal, concern, timeline question, or budget mention.\n\n"
+        "Your job: pass a quick, insightful note to the host—the kind of thing a trusted advisor would whisper. "
+        "Ground your insight in both what they *said* and (if available) what their face is showing:\n"
+        "- Objection + tense face → validate first, then address\n"
+        "- Interest + genuine smile → momentum is building, capitalize\n"
+        "- Confusion + furrowed brow → they're overloaded, simplify and clarify\n"
+        "- Commitment language + relaxed face → they're ready, close it\n"
+        "- Concern + guarded expression → unmet need, explore what they need to feel safe\n\n"
+        "Draw on psychology: validation before persuasion (Rogers), cognitive load theory (Sweller), reciprocity "
+        "and commitment (Cialdini), emotional labeling (FBI negotiation). If they said something specific, echo it "
+        "back in your insight to make it feel tailored.\n\n"
+        "Rules:\n"
+        "- 1-3 short lines, conversational tone, no preamble\n"
+        "- Be specific: quote or paraphrase what they said, describe what you see\n"
+        "- Make it actionable: tell them what to do next\n"
+        "- Do not use 'B2B' or jargon\n"
+        "- Sound like a real person who genuinely cares about their success"
     )
+    category_context = {
+        "objection": "pushing back, raising a concern or disagreement",
+        "interest": "expressing curiosity or positive reception",
+        "confusion": "signaling uncertainty or lack of understanding",
+        "commitment": "signaling readiness to move forward or agree",
+        "concern": "voicing worry or hesitation",
+        "timeline": "asking about timing, deadlines, or delivery",
+        "budget": "raising cost, pricing, or investment questions",
+    }
     user_parts = [
-        f"The partner said: \"{phrase}\" (category: {category}).",
+        f"SPEECH CUE: Partner said \"{phrase}\" — they're {category_context.get(category, category)}.",
     ]
     if transcript_snippet:
-        user_parts.append(f"Recent conversation context: \"{transcript_snippet}\".")
+        user_parts.append(f"CONVERSATION CONTEXT: \"{transcript_snippet}\"")
     if metrics_summary:
-        user_parts.append(f"What you're seeing in the room: {metrics_summary}.")
-    user_parts.append("What would you say to the host right now? One to three short lines.")
+        # Add specific metric context
+        attn = metrics_summary.get("attention")
+        eye = metrics_summary.get("eyeContact")
+        expr = metrics_summary.get("facialExpressiveness")
+        cues = []
+        if attn is not None and attn > 70:
+            cues.append("high attention")
+        elif attn is not None and attn < 30:
+            cues.append("low attention (distracted)")
+        if eye is not None and eye > 70:
+            cues.append("strong eye contact")
+        elif eye is not None and eye < 30:
+            cues.append("avoiding eye contact")
+        if expr is not None and expr > 70:
+            cues.append("animated expression")
+        elif expr is not None and expr < 30:
+            cues.append("guarded/flat expression")
+        if cues:
+            user_parts.append(f"FACIAL CUES: {'; '.join(cues)}.")
+    user_parts.append("What would you whisper to the host? Be specific—connect what they said to what you see.")
 
     user_content = " ".join(user_parts)
     messages = [{"role": "user", "content": user_content}]
@@ -339,28 +539,76 @@ def generate_insight_for_opportunity(
     transcript_snippet = transcript[-600:] if len(transcript) > 600 else transcript
 
     system = (
-        "You are an expert B2B meeting coach observing the meeting in real time. You've just noticed something "
-        "important—a moment of opportunity. The partner might be ready to close, decision-ready, showing cognitive "
-        "overload, surfacing skepticism, having an aha moment, or shifting from objection to openness. These are "
-        "psychology-based signals from their expressions and demeanor. You're about to pass a quick note to the host. "
-        "What do you say?\n\n"
-        "Say one to three short lines—the kind of thing you'd whisper to someone next to you. Tie it to what you're "
-        "seeing: the specific opportunity and the broader context. Be specific to business meetings. Make it "
-        "actionable so they know the next step. Do not use the term B2B. Keep it concise—2–3 lines max, nothing "
-        "overwhelming. "
-        "If you have recent speech from the partner, weave it in—e.g. confusion moment plus 'can you clarify' might "
-        "lead you to suggest pausing and clarifying. Draw on psychology: decision fatigue, cognitive load, trust "
-        "signals, buying signals. Sound like a real person who cares, not a script."
+        "You are an expert meeting coach trained in FACS (Facial Action Coding System), behavioral psychology, and "
+        "sales/negotiation science. You're observing a meeting in real time—watching the partner's face and listening "
+        "to their words. You just detected a significant *moment of opportunity* based on their facial expressions "
+        "and behavioral patterns.\n\n"
+        "Your job: pass a quick, insightful note to the host—the kind of thing a trusted advisor would whisper. "
+        "Ground your insight in what you're *actually observing* and the specific opportunity type:\n"
+        "- Closing window / decision-ready: relaxed face, tension release, sustained eye contact, subtle nods\n"
+        "- Buying signal / genuine interest: Duchenne smile (AU6+AU12), raised brows, forward lean\n"
+        "- Cognitive overload: furrowed brow (AU4), gaze aversion, stillness, overwhelmed expression\n"
+        "- Skepticism / resistance: asymmetric lip pull (contempt), lip compression (AU23/24), nose wrinkle (AU9)\n"
+        "- Aha moment: eyes widen, brows raise, genuine smile—insight just landed\n"
+        "- Objection fading: tension releasing, face softening, guarded expression opening up\n"
+        "- Disengagement risk: flat affect, gaze drifting, reduced expressiveness\n\n"
+        "Draw on psychology: Kahneman's System 1/2, Ekman's microexpressions, Cialdini's commitment/consistency, "
+        "decision fatigue, approach-avoidance motivation. If there's speech context, weave it in.\n\n"
+        "Rules:\n"
+        "- 1-3 short lines, conversational tone, no preamble\n"
+        "- Be specific: describe what you're seeing and why it matters\n"
+        "- Make it actionable: tell them what to do in this moment\n"
+        "- Do not use 'B2B' or jargon\n"
+        "- Sound like a real person who genuinely cares about their success"
     )
+    # Map opportunity IDs to psychology-grounded descriptions
+    opportunity_context = {
+        "closing_window": "partner's face has relaxed, tension released—internal decision appears made",
+        "decision_ready": "sustained eye contact, relaxed brow, subtle agreement cues—they're ready to commit",
+        "ready_to_sign": "open posture, genuine smile, forward lean—all signals say yes",
+        "buying_signal": "Duchenne smile (eyes crinkling), raised brows, engaged posture—genuine interest",
+        "commitment_cue": "nodding, steady gaze, relaxed face—agreement signals detected",
+        "cognitive_overload_risk": "furrowed brow (AU4), gaze aversion, stillness—cognitive load is spiking",
+        "confusion_moment": "brow furrow, squint, processing expression—they're lost",
+        "need_clarity": "subtle uncertainty signals—something isn't landing",
+        "skepticism_surface": "asymmetric lip pull, narrowed eyes—skepticism is showing",
+        "objection_moment": "lip compression, tense jaw—an objection is brewing",
+        "resistance_peak": "guarded face, averted gaze, closed posture—resistance is high",
+        "hesitation_moment": "micro-freeze, tension flicker—they're on the fence",
+        "disengagement_risk": "flat affect, gaze drifting—attention is slipping",
+        "objection_fading": "face softening, tension releasing—resistance is dropping",
+        "aha_moment": "eyes widened, brows raised, genuine smile—insight just landed",
+        "re_engagement_opportunity": "attention just snapped back—gaze refocused, head turned",
+        "alignment_cue": "nodding, mirroring posture, warm eye contact—they're with you",
+        "genuine_interest": "authentic engagement markers—Duchenne smile, forward lean, active listening",
+        "listening_active": "eyes locked, body still, face open—absorbing every word",
+        "trust_building_moment": "open expression, steady gaze, approachable demeanor—trust is forming",
+        "urgency_sensitive": "alertness around timing—urgency is on their mind",
+        "processing_deep": "inward gaze, stillness, slight brow furrow—deep processing mode",
+        "attention_peak": "wide eyes, engaged face, oriented body—attention is maxed",
+        "rapport_moment": "genuine smile, posture mirroring, warm eye contact—rapport is high",
+    }
     user_parts = [
-        f"What you're noticing: {opportunity_id}.",
-        f"Context: {context or {}}.",
+        f"OPPORTUNITY DETECTED: {opportunity_id}",
+        f"WHAT YOU'RE SEEING: {opportunity_context.get(opportunity_id, context or 'notable shift in expression')}",
     ]
     if metrics_summary:
-        user_parts.append(f"What you're seeing in the room: {metrics_summary}.")
+        # Add specific metric context
+        attn = metrics_summary.get("attention")
+        eye = metrics_summary.get("eyeContact")
+        expr = metrics_summary.get("facialExpressiveness")
+        cues = []
+        if attn is not None:
+            cues.append(f"attention: {attn:.0f}/100")
+        if eye is not None:
+            cues.append(f"eye contact: {eye:.0f}/100")
+        if expr is not None:
+            cues.append(f"expressiveness: {expr:.0f}/100")
+        if cues:
+            user_parts.append(f"METRICS: {', '.join(cues)}.")
     if transcript_snippet:
-        user_parts.append(f"Recent partner speech: \"{transcript_snippet}\".")
-    user_parts.append("What would you say to the host right now? One to three short lines.")
+        user_parts.append(f"SPEECH CONTEXT: \"{transcript_snippet}\"")
+    user_parts.append("What would you whisper to the host? Be specific about the opportunity and what to do.")
 
     user_content = " ".join(user_parts)
     messages = [{"role": "user", "content": user_content}]

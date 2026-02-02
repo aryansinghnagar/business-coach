@@ -56,8 +56,9 @@ AZURE_FACE_API_REGION: str = os.getenv("AZURE_FACE_API_REGION", "centralindia")
 # auto: App chooses from device tier + network latency (may pick azure_face_api)
 FACE_DETECTION_METHOD: str = os.getenv("FACE_DETECTION_METHOD", "mediapipe")
 
-# Minimum confidence for face detection (0.1-0.9). Lower = more permissive in suboptimal lighting.
-MIN_FACE_CONFIDENCE: float = float(os.getenv("MIN_FACE_CONFIDENCE", "0.15"))
+# Minimum confidence for face detection (0.01-0.9). Lower = more permissive in suboptimal lighting.
+# Default 0.05 is very permissive to handle various webcam/lighting conditions.
+MIN_FACE_CONFIDENCE: float = float(os.getenv("MIN_FACE_CONFIDENCE", "0.05"))
 
 # Lightweight mode: MediaPipe only, reduced buffer, process every 2nd frame.
 # Use on devices with less computational power for real-time processing.
