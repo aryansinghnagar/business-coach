@@ -1486,8 +1486,10 @@ class ExpressionSignifierEngine:
         # We don't have corners_down in buffer; use current frame only but require stricter MAR + baseline
         sustained_low_mar = True
         if hasattr(self, '_buf') and len(self._buf) >= 4:
-            below_count = sum(1 for b in list(self._buf)[-4:]
-                            if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.80)
+            below_count = sum(
+                1 for b in list(self._buf)[-4:]
+                if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.80)
+            )
             sustained_low_mar = below_count >= 3
 
         # High score ONLY when BOTH corners down AND (sustained low MAR + below baseline)
