@@ -9,6 +9,7 @@ See docs/DOCUMENTATION.md for full documentation.
 
 from flask import Flask
 from flask_cors import CORS
+from flask_compress import Compress
 from routes import api
 import config
 
@@ -26,6 +27,9 @@ def create_app() -> Flask:
     # In production, restrict this to specific origins
     CORS(app, resources={r"/*": {"origins": "*"}})
     
+    # Compress JSON and other responses when client supports gzip (reduces bandwidth for /engagement/state etc.)
+    Compress(app)
+    
     # Register all API routes
     app.register_blueprint(api)
     
@@ -38,13 +42,18 @@ app = create_app()
 
 if __name__ == "__main__":
     """
-    Run the Flask development server.
-    
+    Run the Flask application.
+    Uses Waitress (production WSGI) by default to avoid the dev-server warning;
+    set FLASK_DEBUG=true for development (auto-reload, debugger, but shows warning).
     Configuration is loaded from config.py, with environment variables
     taking precedence over default values.
     """
-    app.run(
-        host=config.FLASK_HOST,
-        port=config.FLASK_PORT,
-        debug=config.FLASK_DEBUG
-    )
+    if config.FLASK_DEBUG:
+        app.run(
+            host=config.FLASK_HOST,
+            port=config.FLASK_PORT,
+            debug=True
+        )
+    else:
+        import waitress
+        waitress.serve(app, host=config.FLASK_HOST, port=config.FLASK_PORT, threads=6)

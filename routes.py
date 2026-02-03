@@ -9,8 +9,10 @@ See docs/DOCUMENTATION.md for API reference.
 from flask import Blueprint, request, jsonify, send_from_directory, Response
 from services.azure_openai import openai_service
 from services.insight_generator import (
+    append_speech_tag,
     append_transcript,
     clear_pending_aural_alert,
+    clear_recent_speech_tags,
     clear_transcript,
     generate_insight_for_aural_trigger,
     generate_insight_for_opportunity,
@@ -21,6 +23,7 @@ from services.insight_generator import (
     _check_for_trigger_phrases,
     _set_pending_aural_alert,
 )
+from utils.azure_engagement_metrics import binarize_metrics
 from utils.b2b_opportunity_detector import clear_opportunity_state
 from services.azure_speech import speech_service
 from utils.helpers import build_config_response
@@ -77,20 +80,6 @@ def static_files(filename):
         return send_from_directory("static", filename)
     except FileNotFoundError:
         return jsonify({"error": f"Static file not found: {filename}"}), 404
-
-
-@api.route("/chat.html")
-def chat_page():
-    """
-    Serve the chat.html page (if it exists).
-    
-    Returns:
-        Response: HTML file or error response
-    """
-    try:
-        return send_from_directory(".", "chat.html")
-    except FileNotFoundError:
-        return jsonify({"error": "chat.html not found"}), 404
 
 
 @api.route("/favicon.ico")
@@ -651,6 +640,7 @@ def engagement_transcript():
             match = _check_for_trigger_phrases(text)
             if match:
                 category, phrase = match
+                append_speech_tag(category, phrase)  # For multimodal composite detection
                 _set_pending_aural_alert(category, phrase)
         return "", 204
     except Exception as e:
@@ -714,6 +704,7 @@ def stop_engagement_detection():
             engagement_detector = None
         clear_transcript()
         clear_pending_aural_alert()
+        clear_recent_speech_tags()
         clear_opportunity_state()
 
         return jsonify({
@@ -855,19 +846,35 @@ def get_engagement_state():
             "mouthActivity": state.metrics.mouth_activity
         }
         
-        # Sanitize signifier scores (ensure no NaN/Inf reach frontend)
+        # Sanitize signifier scores (0 or 100 only; no NaN/Inf)
         sig_scores = state.signifier_scores
         if sig_scores and isinstance(sig_scores, dict):
             clean = {}
             for k, v in sig_scores.items():
                 try:
                     f = float(v)
-                    clean[k] = max(0.0, min(100.0, f)) if math.isfinite(f) else 0.0
+                    if not math.isfinite(f):
+                        clean[k] = 0.0
+                    elif f >= 50.0:
+                        clean[k] = 100.0
+                    else:
+                        clean[k] = 0.0
                 except (TypeError, ValueError):
                     clean[k] = 0.0
             sig_scores = clean
         elif not sig_scores:
             sig_scores = None
+
+        # Binarize Azure metrics for display (base/composite -> 0 or 100)
+        azure_metrics_out = None
+        if state.azure_metrics and isinstance(state.azure_metrics, dict):
+            base = state.azure_metrics.get("base") or {}
+            composite = state.azure_metrics.get("composite") or {}
+            azure_metrics_out = {
+                "base": binarize_metrics(base, up=55.0),
+                "composite": binarize_metrics(composite, up=55.0),
+                "score": state.azure_metrics.get("score", 0.0),
+            }
 
         # Return engagement state with all details
         response_data = {
@@ -881,7 +888,7 @@ def get_engagement_state():
             "fps": float(engagement_detector.get_fps()),
             "signifierScores": sig_scores,
             "detectionMethod": state.detection_method if state.detection_method else "mediapipe",
-            "azureMetrics": state.azure_metrics if state.azure_metrics else None,
+            "azureMetrics": azure_metrics_out,
         }
         
         # Include alert if present (spike or phrase-triggered); consumed on first return.
@@ -903,6 +910,14 @@ def get_engagement_state():
         if alert and not engagement_detector.can_show_insight():
             alert = None
             from_engagement = False
+        # Aural (phrase-triggered) insights: show only when at least one visual feature is present
+        if alert and not from_engagement:
+            score = float(state.score) if state else 0.0
+            sig = sig_scores or {}
+            detected_signifiers = sum(1 for v in sig.values() if float(v) == 100.0)
+            has_visual = score >= 60.0 or detected_signifiers >= 2
+            if not has_visual:
+                alert = None
         if alert:
             if from_engagement:
                 engagement_detector.clear_pending_alert()

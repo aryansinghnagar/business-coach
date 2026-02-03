@@ -36,26 +36,9 @@ var AZURE_GROUPS = [
     { id: 'composite', title: 'B2B Composites', keys: ['receptive', 'focused', 'interested', 'agreeable', 'open', 'skeptical', 'concerned', 'disagreeing', 'stressed', 'disengaged'] }
 ];
 
+/** Two states only: detected (100) = active, else muted. */
 function getColorForScore(score) {
-    if (score <= 30) {
-        var t = score / 30;
-        var r = Math.round(239 * (1 - t) + 167 * t);
-        var g = Math.round(68 * (1 - t) + 139 * t);
-        var b = Math.round(68 * (1 - t) + 250 * t);
-        return 'rgb(' + r + ',' + g + ',' + b + ')';
-    }
-    if (score <= 70) {
-        var t = (score - 30) / 40;
-        var r = Math.round(167 + (34 - 167) * t);
-        var g = Math.round(139 + (197 - 139) * t);
-        var b = Math.round(250 + (94 - 250) * t);
-        return 'rgb(' + r + ',' + g + ',' + b + ')';
-    }
-    var t = (score - 70) / 30;
-    var r = Math.round(34 + (16 - 34) * t);
-    var g = Math.round(197 + (185 - 197) * t);
-    var b = Math.round(94 + (129 - 94) * t);
-    return 'rgb(' + r + ',' + g + ',' + b + ')';
+    return (score === 100) ? '#22c55e' : '#64748b';
 }
 
 /** Real-time metric display (no smoothing). */
@@ -77,7 +60,7 @@ class AzureMetricsPanel {
 
         var header = document.createElement('div');
         header.className = 'signifier-panel-header';
-        header.textContent = 'Azure Face API – Emotions & B2B Composites';
+        header.textContent = 'Azure metrics';
         inner.appendChild(header);
 
         var groupsEl = document.createElement('div');
@@ -139,21 +122,16 @@ class AzureMetricsPanel {
         var base = azureMetrics.base && typeof azureMetrics.base === 'object' ? azureMetrics.base : {};
         var composite = azureMetrics.composite && typeof azureMetrics.composite === 'object' ? azureMetrics.composite : {};
         var allScores = Object.assign({}, base, composite);
+        var threshold = 55;
 
         for (var key in this.rows) {
             var r = this.rows[key];
             var v = allScores[key];
             var num = (typeof v === 'number' && isFinite(v)) ? v : (typeof v === 'string' ? parseFloat(v) : NaN);
-            var raw = (!isNaN(num)) ? Math.max(0, Math.min(100, num)) : null;
-            if (raw !== null) {
-                var display = Math.max(0, Math.min(100, raw));
-                r.fill.style.width = display + '%';
-                r.fill.style.background = getColorForScore(display);
-                r.value.textContent = Math.round(display);
-            } else {
-                r.fill.style.width = '0%';
-                r.value.textContent = '--';
-            }
+            var isDetected = (!isNaN(num) && num >= threshold);
+            r.fill.style.width = isDetected ? '100%' : '0%';
+            r.fill.style.background = getColorForScore(isDetected ? 100 : 0);
+            r.value.textContent = isDetected ? 'Detected' : '\u2014';
         }
     }
 
@@ -162,7 +140,7 @@ class AzureMetricsPanel {
         for (var key in this.rows) {
             var r = this.rows[key];
             r.fill.style.width = '0%';
-            r.value.textContent = '--';
+            r.value.textContent = '\u2014';
         }
     }
 }

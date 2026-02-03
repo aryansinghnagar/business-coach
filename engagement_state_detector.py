@@ -5,6 +5,10 @@ Orchestrates real-time engagement from video: face detection (MediaPipe or Azure
 30 signifiers → 4 group means (G1–G4), score (0–100), spike alerts, and B2B opportunity
 detection. Alerts (spike / opportunity / aural) are consumed by GET /engagement/state
 and turned into popup + TTS via the insight generator. See docs/DOCUMENTATION.md.
+
+Pipeline: capture frame → update last-frame reference for video feed → optional
+lightweight skip (every 2nd frame) → process frame (detect faces, signifiers, state)
+→ update current state and callbacks.
 """
 
 import time
@@ -27,6 +31,7 @@ from utils.expression_signifiers import ExpressionSignifierEngine
 from utils import signifier_weights
 from utils.detection_capability import evaluate_capability, recommend_detection_method
 from utils.b2b_opportunity_detector import detect_opportunity
+from services.insight_generator import get_recent_speech_tags
 
 
 class EngagementLevel(Enum):
@@ -222,7 +227,9 @@ class EngagementStateDetector:
         self._composite_100_cooldown_sec: float = 10.0
         # Global buffer between insight popups (any type) to avoid overwhelming user
         self._last_insight_popup_time: float = 0.0
-        self._insight_buffer_sec: float = 8.0
+        self._insight_buffer_sec: float = 28.0  # 24–30s range; research: spacing reduces overload
+        # Require at least this many concurrent features before showing an insight popup
+        self._min_concurrent_features: int = 2
         
         # Stock messages for metric group spikes (B2B meeting context; overwritten by insight_generator when OpenAI succeeds)
         self._SPIKE_MESSAGES: dict = {
@@ -239,13 +246,14 @@ class EngagementStateDetector:
     def get_last_frame_jpeg(self) -> Optional[bytes]:
         """
         Return the most recent video frame as JPEG bytes for the engagement video feed.
-        Thread-safe; returns None if no frame is available.
+        Thread-safe; copies the frame only when requested (copy-on-read) to avoid copying every frame in the loop.
         """
         with self._last_frame_lock:
             if self._last_frame is None:
                 return None
-            _, buf = cv2.imencode(".jpg", self._last_frame)
-            return buf.tobytes()
+            frame_to_encode = self._last_frame.copy()
+        _, buf = cv2.imencode(".jpg", frame_to_encode)
+        return buf.tobytes()
 
     def start_detection(
         self,
@@ -379,9 +387,9 @@ class EngagementStateDetector:
                     time.sleep(0.033)  # ~30 FPS
                     continue
 
-                # Update last frame for video-feed streaming (thread-safe)
+                # Store reference for video feed; copy happens only when client requests JPEG (reduces memory bandwidth).
                 with self._last_frame_lock:
-                    self._last_frame = frame.copy()
+                    self._last_frame = frame
 
                 # Lightweight: process every 2nd frame to halve CPU
                 if self.lightweight_mode:
@@ -482,15 +490,22 @@ class EngagementStateDetector:
                 landmarks = expand_azure_landmarks_to_mediapipe(landmarks, bbox, frame.shape)
             self.signifier_engine.update(landmarks, face_result, frame.shape)
             signifier_scores = self.signifier_engine.get_all_scores()
-            mediapipe_score = self.signifier_engine.get_composite_score(signifier_scores)
+            weights = self.signifier_engine._get_weights()
+            mediapipe_score = self.signifier_engine.get_composite_score(signifier_scores, weights)
             metrics = self._metrics_from_signifiers(signifier_scores)
-            group_means = self.signifier_engine.get_group_means(signifier_scores)
+            group_means = self.signifier_engine.get_group_means(signifier_scores, weights)
             for k in ("g1", "g2", "g3", "g4"):
                 self._group_history[k].append(group_means[k])
             now = time.time()
-            self._check_composite_at_100(group_means, mediapipe_score, now)
+            self._check_composite_at_100(
+                group_means, mediapipe_score, now,
+                signifier_scores=signifier_scores,
+            )
             self._check_spike_alerts(group_means, now)
-            self._check_opportunity_alerts(group_means, signifier_scores, now)
+            self._check_opportunity_alerts(
+                group_means, signifier_scores, now,
+                composite_score=mediapipe_score,
+            )
             azure_score = None
             if getattr(self, "_azure_detector_secondary", None) and self._get_all_azure_metrics:
                 try:
@@ -527,17 +542,24 @@ class EngagementStateDetector:
                 landmarks = expand_azure_landmarks_to_mediapipe(landmarks, bbox, frame.shape)
             self.signifier_engine.update(landmarks, face_result, frame.shape)
             signifier_scores = self.signifier_engine.get_all_scores()
-            group_means = self.signifier_engine.get_group_means(signifier_scores)
-            composite_score = self.signifier_engine.get_composite_score(signifier_scores)
+            weights = self.signifier_engine._get_weights()
+            group_means = self.signifier_engine.get_group_means(signifier_scores, weights)
+            composite_score = self.signifier_engine.get_composite_score(signifier_scores, weights)
             g1, g4 = group_means["g1"], group_means["g4"]
             score = float((g1 + g4) / 2.0)
             metrics = self._metrics_from_signifiers(signifier_scores)
             for k in ("g1", "g2", "g3", "g4"):
                 self._group_history[k].append(group_means[k])
             now = time.time()
-            self._check_composite_at_100(group_means, composite_score, now)
+            self._check_composite_at_100(
+                group_means, composite_score, now,
+                signifier_scores=signifier_scores,
+            )
             self._check_spike_alerts(group_means, now)
-            self._check_opportunity_alerts(group_means, signifier_scores, now)
+            self._check_opportunity_alerts(
+                group_means, signifier_scores, now,
+                composite_score=composite_score,
+            )
 
         if not np.isfinite(score) or score < 0 or score > 100:
             if is_azure and not is_unified:
@@ -619,14 +641,51 @@ class EngagementStateDetector:
             face_detected=False,
             confidence=0.0
         )
-    
+
+    def _count_concurrent_features(
+        self,
+        group_means: dict,
+        composite_score: float,
+        signifier_scores: Optional[dict],
+        has_recent_speech: bool,
+        include_speech: bool = True,
+    ) -> int:
+        """
+        Count how many "concurrent features" are active in the current frame.
+        Used to require multiple features simultaneously before showing an insight popup.
+        """
+        count = 0
+        # Group means above threshold (G3 = low resistance, so high is good)
+        for gkey in ("g1", "g2", "g3", "g4"):
+            if group_means.get(gkey, 0.0) >= 55.0:
+                count += 1
+        # Composite engagement elevated
+        if composite_score >= 60.0:
+            count += 1
+        # At least 2 signifiers in "detected" (100) state
+        if signifier_scores:
+            detected = sum(1 for v in signifier_scores.values() if float(v) == 100.0)
+            if detected >= 2:
+                count += 1
+        # Recent speech/trigger phrase (aural)
+        if include_speech and has_recent_speech:
+            count += 1
+        return count
+
     def _check_composite_at_100(
-        self, group_means: dict, composite_score: float, now: float
+        self,
+        group_means: dict,
+        composite_score: float,
+        now: float,
+        signifier_scores: Optional[dict] = None,
+        has_recent_speech: Optional[bool] = None,
     ) -> None:
         """
-        When composite metrics relevant to business meetings hit 100, trigger popup + speech.
-        G1 (Interest & Engagement) or G4 (Decision-Ready) or overall composite at 100.
+        When composite metrics relevant to business meetings hit 100, trigger popup + speech
+        only if at least _min_concurrent_features are active (multi-feature gate).
         """
+        if has_recent_speech is None:
+            has_recent_speech = len(get_recent_speech_tags(12)) > 0
         with self.lock:
             if self._pending_alert is not None:
                 return
@@ -636,7 +695,6 @@ class EngagementStateDetector:
             g4 = group_means.get("g4", 0.0)
             triggered = False
             group_hit = ""
-            # With binary metrics, group means are discrete (e.g. g4: 0,33,67,100)
             if g1 >= 90.0:
                 triggered = True
                 group_hit = "g1"
@@ -647,6 +705,11 @@ class EngagementStateDetector:
                 triggered = True
                 group_hit = "composite"
             if triggered:
+                n = self._count_concurrent_features(
+                    group_means, composite_score, signifier_scores, has_recent_speech
+                )
+                if n < self._min_concurrent_features:
+                    return
                 self._last_composite_100_time = now
                 self._pending_alert = {
                     "type": "composite_100",
@@ -688,13 +751,18 @@ class EngagementStateDetector:
                     return
 
     def _check_opportunity_alerts(
-        self, group_means: dict, signifier_scores: Optional[dict], now: float
+        self,
+        group_means: dict,
+        signifier_scores: Optional[dict],
+        now: float,
+        composite_score: float = 0.0,
     ) -> None:
         """
         Detect B2B opportunity features (e.g. closing window, cognitive overload, skepticism).
-        If none fired, do nothing. If one fires and no spike alert is pending, set _pending_alert
-        so the API can generate an insight via Azure OpenAI (see services/insight_generator).
+        Set _pending_alert only if at least _min_concurrent_features are active (multi-feature gate).
         """
+        speech_tags = get_recent_speech_tags(12)
+        has_recent_speech = len(speech_tags) > 0
         with self.lock:
             if self._pending_alert is not None:
                 return
@@ -703,8 +771,14 @@ class EngagementStateDetector:
                 group_history=self._group_history,
                 signifier_scores=signifier_scores,
                 now=now,
+                recent_speech_tags=speech_tags,
             )
             if result is not None:
+                n = self._count_concurrent_features(
+                    group_means, composite_score, signifier_scores, has_recent_speech
+                )
+                if n < self._min_concurrent_features:
+                    return
                 oid, context = result
                 self._pending_alert = {
                     "type": "opportunity",

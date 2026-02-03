@@ -49,6 +49,9 @@ class EngagementDetector {
         this._partnerFrameIntervalId = null;
         this._partnerVideo = null;
         this._partnerCanvas = null;
+        // Debounce panel reset: only reset after N consecutive no-face responses (reduces flicker)
+        this._consecutiveNoFace = 0;
+        this._noFaceResetThreshold = 4;
     }
     
     /**
@@ -94,6 +97,7 @@ class EngagementDetector {
             // Start polling
             this.isActive = true;
             this.consecutiveErrors = 0;
+            this._consecutiveNoFace = 0;
             this.startPolling();
             
             return true;
@@ -137,6 +141,8 @@ class EngagementDetector {
             }
             var hintEl = document.getElementById('engagementMetricsHint');
             if (hintEl) hintEl.style.display = 'none';
+            var statusEl = document.getElementById('engagementMetricsStatus');
+            if (statusEl) statusEl.textContent = '';
             this._setMetricsPanelVisibility('mediapipe');
             
             // Clear state
@@ -144,14 +150,15 @@ class EngagementDetector {
             this.currentSourcePath = null;
             this.currentDetectionMethod = null;
             this.consecutiveErrors = 0;
-            
+            this._consecutiveNoFace = 0;
+
             return true;
         } catch (error) {
             console.error('Error stopping engagement detection:', error);
             return false;
         }
     }
-    
+
     /**
      * Start polling for engagement state updates.
      */
@@ -204,7 +211,7 @@ class EngagementDetector {
             
             if (!response.ok) {
                 if (response.status === 404) {
-                    // Detection not started yet - not an error
+                    // Detection not started yet - do not count toward consecutiveErrors
                     return;
                 }
                 throw new Error(`HTTP ${response.status}`);
@@ -220,10 +227,20 @@ class EngagementDetector {
 
             this._updateMetricsHint(data.faceDetected, data.signifierScores, data.azureMetrics);
 
+            var hasFaceData = data.faceDetected === true ||
+                (data.signifierScores && Object.keys(data.signifierScores).length > 0) ||
+                (data.azureMetrics && (data.azureMetrics.base || data.azureMetrics.composite));
+            if (hasFaceData) {
+                this._consecutiveNoFace = 0;
+            }
+
             if (method === 'azure_face_api') {
                 if (this.azureMetricsPanel) {
                     if (data.faceDetected === false) {
-                        this.azureMetricsPanel.reset();
+                        this._consecutiveNoFace++;
+                        if (this._consecutiveNoFace >= this._noFaceResetThreshold) {
+                            this.azureMetricsPanel.reset();
+                        }
                     } else if (data.azureMetrics != null) {
                         this.azureMetricsPanel.update(data.azureMetrics);
                     }
@@ -231,7 +248,10 @@ class EngagementDetector {
             } else {
                 if (this.signifierPanel) {
                     if (data.faceDetected === false) {
-                        this.signifierPanel.reset();
+                        this._consecutiveNoFace++;
+                        if (this._consecutiveNoFace >= this._noFaceResetThreshold) {
+                            this.signifierPanel.reset();
+                        }
                     } else if (data.signifierScores != null) {
                         this.signifierPanel.update(data.signifierScores);
                     }
@@ -246,12 +266,23 @@ class EngagementDetector {
         } catch (error) {
             this.consecutiveErrors++;
             console.debug('Engagement state fetch error:', error);
-            
-            // Stop polling after too many consecutive errors
+
+            // Stop polling after too many consecutive errors (404 is not counted above)
             if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
                 console.warn('Too many consecutive errors, stopping engagement detection polling');
                 this.stopPolling();
                 this.isActive = false;
+                // Panel mode: retry polling after 10s so metrics can recover without full reload
+                if (typeof window !== 'undefined' && window.self !== window.top) {
+                    var self = this;
+                    setTimeout(function () {
+                        if (self.apiBaseUrl) {
+                            self.consecutiveErrors = 0;
+                            self.isActive = true;
+                            self.startPolling();
+                        }
+                    }, 10000);
+                }
             }
         } finally {
             this._pendingRequest = false;
@@ -263,14 +294,25 @@ class EngagementDetector {
      */
     _updateMetricsHint(faceDetected, signifierScores, azureMetrics) {
         var hintEl = document.getElementById('engagementMetricsHint');
-        if (!hintEl) return;
-        var hasData = (signifierScores && Object.keys(signifierScores).length > 0) ||
-            (azureMetrics && (azureMetrics.base || azureMetrics.composite));
-        if (hasData) {
-            hintEl.style.display = 'none';
-        } else if (faceDetected === false) {
-            hintEl.textContent = 'Position your face in view to see engagement metrics';
-            hintEl.style.display = 'block';
+        if (hintEl) {
+            var hasData = (signifierScores && Object.keys(signifierScores).length > 0) ||
+                (azureMetrics && (azureMetrics.base || azureMetrics.composite));
+            if (hasData) {
+                hintEl.style.display = 'none';
+            } else if (faceDetected === false) {
+                hintEl.textContent = 'Position your face in view to see engagement metrics';
+                hintEl.style.display = 'block';
+            }
+        }
+        // Panel mode: small status line for diagnostics (Metrics: live / Waiting for face…)
+        if (typeof window !== 'undefined' && window.self !== window.top) {
+            var statusEl = document.getElementById('engagementMetricsStatus');
+            if (statusEl) {
+                var hasDataStatus = faceDetected === true ||
+                    (signifierScores && Object.keys(signifierScores).length > 0) ||
+                    (azureMetrics && (azureMetrics.base || azureMetrics.composite));
+                statusEl.textContent = hasDataStatus ? 'Metrics: live' : (faceDetected === false ? 'Waiting for face…' : '');
+            }
         }
     }
 

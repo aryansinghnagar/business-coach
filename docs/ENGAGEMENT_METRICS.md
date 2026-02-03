@@ -92,6 +92,78 @@ To minimize false positives (incorrectly flagging normal expressions as engageme
 
 ---
 
+## 1.6 Engagement Cues in Business Meetings: Research Mapping
+
+Recent research (2022–2025) on co-located and online meetings links engagement state to facial and speech cues. The table below maps these findings to the application’s metric groups (G1–G4) and speech-tag categories used for multimodal composite detection.
+
+| Research cue / finding | Metric(s) / group | Speech-tag category | Composite / meaning |
+|------------------------|-------------------|----------------------|----------------------|
+| **Gaze stability** (3+ s direct gaze; social gaze while listening) | G1 (eye contact), G4 (fixed gaze) | — | Decision-ready; sustained attention |
+| **Gaze aversion** (brief = processing; sustained = disengagement) | G2 (look up/lr), G3 (gaze aversion) | confusion, concern | Cognitive overload; disengagement |
+| **Nodding** (agreement, self-validation; Wells & Petty) | G1 (rhythmic nodding) | commitment, interest | Decision-readiness; alignment |
+| **Duchenne smile + forward lean + eye contact** | G1 (Duchenne, forward lean, eye contact) | interest, commitment | Genuine interest; buying signal |
+| **Furrowed brow (AU 4)** (effortful thinking vs. frustration) | G2 (lowered brow, stillness) | confusion, concern | Cognitive overload; need clarity |
+| **Lip compression / jaw clench** (withholding, disapproval) | G3 (lip compression, jaw clench) | objection, concern | Skepticism; objection moment |
+| **Contempt / asymmetric mouth** (unilateral curl) | G3 (contempt) | objection | Resistance; skepticism |
+| **Relaxed exhale + mouth opening** (tension release) | G4 (relaxed exhale) | commitment | Decision-ready; ready to close |
+| **Eyebrow flash** (~200 ms; recognition, “yes”) | G1 (eyebrow flash) | interest, realization | Aha moment; acknowledgment |
+| **Speaking activity** (who speaks; multimodal > single modality) | — | All phrase categories | Multimodal composites (facial + speech) |
+| **Hesitation / uncertainty language** | G2 (cognitive load) | confusion, concern | Cognitive overload; need clarity |
+| **Commitment / agreement language** | G4 (decision-ready) | commitment, interest | Decision-readiness; closing window |
+| **Objection / pushback language** | G3 (resistance) | objection | Skepticism; objection moment |
+| **Realization phrases** (“aha”, “got it”, “that makes sense”) | G1 (spike, eyebrow flash) | interest, realization | Aha/insight moment |
+
+**Speech-tag categories** (from `PHRASE_CATEGORIES` in `services/insight_generator.py`): `objection`, `interest`, `confusion`, `commitment`, `concern`, `timeline`, `budget`, `realization` (added for multimodal composites). Multimodal composites require both facial conditions and a matching recent speech tag (within a short time window) to reduce false positives and align with research on combined cues.
+
+---
+
+## 1.7 Composite Features (Multimodal)
+
+Composite features are **combinations** of metric groups (G1–G4) and, for multimodal composites, **recent speech tags** from the meeting partner’s transcript. When a composite fires (and cooldown has passed), the app triggers an insight popup and optional TTS via Azure OpenAI. Below: trigger conditions and what each composite denotes.
+
+### Multimodal composites (facial + speech; checked first)
+
+| Composite ID | Trigger conditions | Denotes |
+|--------------|--------------------|--------|
+| **decision_readiness_multimodal** | G4 ≥ 60, G1 ≥ 56, G3 ≥ 56 **and** recent speech tag in `commitment` or `interest` | Partner’s words and face both signal readiness; ask for next step or confirmation. |
+| **cognitive_overload_multimodal** | G2 ≥ 56, G1 &lt; 54 **and** recent speech tag in `confusion` or `concern` | Face and language both indicate overload; pause, simplify, or ask what would clarify. |
+| **skepticism_objection_multimodal** | G3 raw ≥ 48 **and** recent speech tag in `objection` or `concern` | Verbal objection/concern plus resistant face; address directly and listen. |
+| **aha_insight_multimodal** | G2 (recent) ≥ 52, G1 ≥ 58, G3 ≥ 54 **and** recent speech tag in `interest` or `realization` | “Got it” / “that makes sense” plus positive expression; reinforce or deepen. |
+| **disengagement_multimodal** | G1 &lt; 46, G4 &lt; 50, G3 raw ≥ 44 **and** no recent `commitment` or `interest` tag | Low engagement cues and no recent positive language; re-engage with a question or shift. |
+
+### Facial-only composites (priority after multimodal)
+
+| Composite ID | Trigger conditions | Denotes |
+|--------------|--------------------|--------|
+| **closing_window** | G4 ≥ 60, G4 rising (Δ ≥ 16), G3 ≥ 55 | Face has settled; internal decision made; close or ask for commitment. |
+| **decision_ready** | G4 ≥ 62, G1 ≥ 56, G3 ≥ 58 | Sustained gaze, relaxed brow, low resistance; ready to commit. |
+| **ready_to_sign** | G4 ≥ 65, G2 &lt; 50, G3 ≥ 56 | High commitment, low cognitive load; propose next step. |
+| **buying_signal** | G1 ≥ 60, G4 ≥ 52, G3 ≥ 58 | Duchenne, engagement, decision cues; go deeper or reinforce value. |
+| **commitment_cue** | G4 ≥ 58, sustained G4 (4-frame mean ≥ 56), G3 ≥ 56 | Nodding, eye contact, relaxed face; summarize and confirm. |
+| **cognitive_overload_risk** | G2 ≥ 58, G1 &lt; 52 | Furrowed brow, gaze aversion; System 2 maxed; simplify or pause. |
+| **confusion_moment** | G2 ≥ 58 and (G3 raw ≥ 48 or G2 spike) | Processing hit a wall; ask what would clarify or recap. |
+| **need_clarity** | G2 ≥ 55, G1 &lt; 56 | Moderate load, low engagement; pause and summarize or ask what’s unclear. |
+| **skepticism_surface** | G3 raw ≥ 50 and G3 raw rising | Resistance rising; name it and address. |
+| **objection_moment** | G3 raw ≥ 52 | Tension, lip compression; invite them to voice it. |
+| **resistance_peak** | G3 raw ≥ 56 | High resistance; acknowledge, don’t push. |
+| **hesitation_moment** | G2 ≥ 54, G3 raw ≥ 46 | On the fence; lower stakes or ask what’s holding them back. |
+| **disengagement_risk** | G1 &lt; 46, G3 raw ≥ 48 | Attention slipping; re-engage with a question or shift. |
+| **objection_fading** | G3 (recent mean) &lt; 52, current G3 ≥ mean + 10 | Tension easing; reinforce value and suggest next step. |
+| **aha_moment** | G2 (recent) ≥ 55, G1 ≥ 58, G3 ≥ 54 | Insight just landed; capitalize. |
+| **re_engagement_opportunity** | G1 was &lt; 45, now G1 ≥ 50 | Attention returned; strike with key point or question. |
+| **alignment_cue** | G1 and G4 both risen ≥ 10 over window | Interest and commitment rising together; propose next step. |
+| **genuine_interest** | G1 ≥ 58, G3 ≥ 56 | Duchenne, forward lean, eye contact; genuine curiosity. |
+| **listening_active** | G1 ≥ 55, G3 ≥ 54 | Eyes locked, face open; deliver key point. |
+| **trust_building_moment** | G1 ≥ 54, G3 ≥ 58 (optional: facial symmetry ≥ 55) | Open face, steady gaze; be transparent. |
+| **urgency_sensitive** | G4 ≥ 56, G2 ≥ 50, G3 ≥ 54 | Alert to timing; give clear dates or ask timeline. |
+| **processing_deep** | G2 ≥ 56, G3 ≥ 58 | Stillness, inward gaze; give space then reinforce one point. |
+| **attention_peak** | G1 ≥ 60 (or G1 ≥ 62 without eye-contact boost) | Max attention; deliver main message now. |
+| **rapport_moment** | G1 ≥ 54 (or G1 ≥ 56 without symmetry) | Genuine smile, mirroring; leverage rapport. |
+
+**Detection flow:** Video → G1–G4 (and signifiers); transcript → phrase match → speech tag appended to ring buffer. `detect_opportunity()` is called with group means, history, signifiers, and `recent_speech_tags` (last 12 s). Multimodal composites are evaluated first; facial-only composites follow. First composite that fires and is off cooldown (32 s per type) sets the pending alert; `GET /engagement/state` consumes it and generates the insight (Azure OpenAI + stock fallback). See [DOCUMENTATION.md](DOCUMENTATION.md) §7 and `utils/b2b_opportunity_detector.py`.
+
+---
+
 ## 2. Group 1: Interest & Engagement (G1)
 
 ### 2.1 Duchenne Marker (g1_duchenne)

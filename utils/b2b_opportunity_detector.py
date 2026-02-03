@@ -18,12 +18,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+# Type for recent speech tags (from insight_generator.get_recent_speech_tags)
+SpeechTag = Dict[str, Any]  # {"category": str, "phrase": str, "time": float}
+
 # Cooldown per opportunity type (seconds)
 OPPORTUNITY_COOLDOWN_SEC = 32
 _HISTORY_LEN = 12
 
-# Priority order: closing/decision first, then resistance/confusion, then interest/rapport
+# Priority order: multimodal (facial + speech) first when corroborated, then closing/decision, then resistance/confusion, then interest/rapport
 OPPORTUNITY_PRIORITY: List[str] = [
+    "decision_readiness_multimodal",
+    "cognitive_overload_multimodal",
+    "skepticism_objection_multimodal",
+    "aha_insight_multimodal",
+    "disengagement_multimodal",
     "closing_window",
     "decision_ready",
     "ready_to_sign",
@@ -49,6 +57,15 @@ OPPORTUNITY_PRIORITY: List[str] = [
     "attention_peak",
     "rapport_moment",
 ]
+
+# Opportunity IDs that require recent_speech_tags (multimodal)
+MULTIMODAL_OPPORTUNITY_IDS: set = {
+    "decision_readiness_multimodal",
+    "cognitive_overload_multimodal",
+    "skepticism_objection_multimodal",
+    "aha_insight_multimodal",
+    "disengagement_multimodal",
+}
 
 _last_fire_time: Dict[str, float] = {}
 _history_means: Dict[str, deque] = {k: deque(maxlen=_HISTORY_LEN) for k in ("g1", "g2", "g3", "g4")}
@@ -76,6 +93,14 @@ def _check_cooldown(opportunity_id: str, now: float) -> bool:
 
 def _fire(opportunity_id: str, now: float) -> None:
     _last_fire_time[opportunity_id] = now
+
+
+def _has_recent_category(speech_tags: List[SpeechTag], categories: List[str]) -> bool:
+    """True if any recent speech tag has category in categories."""
+    if not speech_tags or not categories:
+        return False
+    cats = set(categories)
+    return any((t.get("category") or "") in cats for t in speech_tags)
 
 
 def _eval_closing_window(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
@@ -269,7 +294,88 @@ def _eval_rapport_moment(
     return g1 >= 56
 
 
+# ----- Multimodal composites (facial + speech; require recent_speech_tags) -----
+
+
+def _eval_decision_readiness_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+) -> bool:
+    """
+    Decision-readiness with speech corroboration: sustained G4 + G1 + commitment/interest language.
+    Research: Cialdini commitment/consistency; verbal + nonverbal yes = ready to act.
+    """
+    if not _has_recent_category(speech_tags, ["commitment", "interest"]):
+        return False
+    return g4 >= 60 and g1 >= 56 and g3 >= 56
+
+
+def _eval_cognitive_overload_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+) -> bool:
+    """
+    Cognitive overload with speech corroboration: high G2 + confusion/concern language.
+    Research: Kahneman System 2 maxed; hesitation/confusion words + furrowed brow = overload.
+    """
+    if not _has_recent_category(speech_tags, ["confusion", "concern"]):
+        return False
+    return g2 >= 56 and g1 < 54
+
+
+def _eval_skepticism_objection_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+) -> bool:
+    """
+    Skepticism/objection with speech corroboration: G3 resistance + objection/concern language.
+    Research: Mehrabian nonverbal leakage; verbal objection + lip compression/contempt = address it.
+    """
+    if not _has_recent_category(speech_tags, ["objection", "concern"]):
+        return False
+    return _g3_raw(g3) >= 48
+
+
+def _eval_aha_insight_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+) -> bool:
+    """
+    Aha/insight moment with speech corroboration: G1 spike + interest/realization language.
+    Research: Eyebrow flash + "got it" / "that makes sense" = insight just landed.
+    """
+    if not _has_recent_category(speech_tags, ["interest", "realization"]):
+        return False
+    if len(hist["g1"]) < 3 or len(hist["g2"]) < 3:
+        return False
+    g2_ago = hist["g2"][-2]
+    return g2_ago >= 52 and g1 >= 58 and g3 >= 54
+
+
+def _eval_disengagement_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+) -> bool:
+    """
+    Disengagement with lack of positive speech: low G1/G4 + no recent commitment/interest.
+    Research: Gaze drift + flat face + no engagement language = attention slipping.
+    """
+    if _has_recent_category(speech_tags, ["commitment", "interest"]):
+        return False  # Positive speech recently = not disengaged
+    return g1 < 46 and g4 < 50 and _g3_raw(g3) >= 44
+
+
 _EVALUATORS: Dict[str, Any] = {
+    "decision_readiness_multimodal": _eval_decision_readiness_multimodal,
+    "cognitive_overload_multimodal": _eval_cognitive_overload_multimodal,
+    "skepticism_objection_multimodal": _eval_skepticism_objection_multimodal,
+    "aha_insight_multimodal": _eval_aha_insight_multimodal,
+    "disengagement_multimodal": _eval_disengagement_multimodal,
     "closing_window": _eval_closing_window,
     "decision_ready": _eval_decision_ready,
     "ready_to_sign": _eval_ready_to_sign,
@@ -302,6 +408,7 @@ def detect_opportunity(
     group_history: Optional[Dict[str, deque]] = None,
     signifier_scores: Optional[Dict[str, float]] = None,
     now: Optional[float] = None,
+    recent_speech_tags: Optional[List[SpeechTag]] = None,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     """
     Evaluate B2B opportunity features in priority order. Returns (opportunity_id, context) for the
@@ -312,6 +419,7 @@ def detect_opportunity(
         group_history: Optional dict of deques (g1, g2, g3, g4) for temporal logic. If None, internal history is used (must be updated via update_history).
         signifier_scores: Optional 30 signifier scores for features that use eye_contact, symmetry, etc.
         now: Timestamp for cooldown; defaults to time.time().
+        recent_speech_tags: Optional list of recent speech tags (category, phrase, time) for multimodal composites.
 
     Returns:
         (opportunity_id, context) or None.
@@ -330,8 +438,10 @@ def detect_opportunity(
     else:
         _update_history(group_means)
 
+    # Build hist once per call and reuse for all evaluators (avoids repeated list copies).
     hist = {k: _hist_list(k) for k in ("g1", "g2", "g3", "g4")}
     sig = signifier_scores
+    speech_tags = recent_speech_tags if recent_speech_tags is not None else []
 
     for oid in OPPORTUNITY_PRIORITY:
         if not _check_cooldown(oid, now):
@@ -340,7 +450,9 @@ def detect_opportunity(
         if fn is None:
             continue
         try:
-            if oid in ("trust_building_moment", "attention_peak", "rapport_moment"):
+            if oid in MULTIMODAL_OPPORTUNITY_IDS:
+                fired = fn(g1, g2, g3, g4, hist, speech_tags)
+            elif oid in ("trust_building_moment", "attention_peak", "rapport_moment"):
                 fired = fn(g1, g2, g3, g4, hist, sig)
             else:
                 fired = fn(g1, g2, g3, g4, hist)
@@ -349,6 +461,7 @@ def detect_opportunity(
                 context = {
                     "g1": g1, "g2": g2, "g3": g3, "g4": g4,
                     "signifier_scores": sig,
+                    "recent_speech_tags": speech_tags,
                 }
                 return (oid, context)
         except Exception:

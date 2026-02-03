@@ -88,6 +88,14 @@ class VideoSourceSelector {
                     <div class="file-input-hint">Supported formats: MP4, AVI, MOV, WebM</div>
                 </div>
                 
+                <div class="video-source-audio-option" id="partnerAudioOptionContainer">
+                    <label class="video-source-checkbox-label">
+                        <input type="checkbox" id="usePartnerAudioCheckbox" name="usePartnerAudio">
+                        <span>Use meeting tab/window audio for speech cues (recommended for richer insights)</span>
+                    </label>
+                    <p class="video-source-audio-note" id="partnerAudioIncludedNote" style="display: none;">Partner audio is included automatically.</p>
+                </div>
+                
                 <div class="video-source-modal-footer">
                     <button class="btn-cancel" id="cancelVideoSource">Cancel</button>
                     <button class="btn-confirm" id="confirmVideoSource">Start Detection</button>
@@ -112,11 +120,23 @@ class VideoSourceSelector {
             radio.addEventListener('change', (e) => {
                 const sourceType = e.target.value;
                 const fileInputContainer = this.modal.querySelector('#fileInputContainer');
+                const partnerAudioCheckbox = this.modal.querySelector('#usePartnerAudioCheckbox');
+                const partnerAudioNote = this.modal.querySelector('#partnerAudioIncludedNote');
                 
                 if (sourceType === 'file') {
                     fileInputContainer.style.display = 'block';
                 } else {
                     fileInputContainer.style.display = 'none';
+                }
+                if (sourceType === 'partner') {
+                    if (partnerAudioCheckbox) {
+                        partnerAudioCheckbox.checked = false;
+                        partnerAudioCheckbox.disabled = true;
+                    }
+                    if (partnerAudioNote) partnerAudioNote.style.display = 'block';
+                } else {
+                    if (partnerAudioCheckbox) partnerAudioCheckbox.disabled = false;
+                    if (partnerAudioNote) partnerAudioNote.style.display = 'none';
                 }
             });
         });
@@ -183,6 +203,8 @@ class VideoSourceSelector {
         
         const sourceType = selectedRadio.value;
         let sourcePath = null;
+        const partnerAudioCheckbox = this.modal.querySelector('#usePartnerAudioCheckbox');
+        const usePartnerAudio = sourceType === 'partner' ? true : (partnerAudioCheckbox ? partnerAudioCheckbox.checked : false);
         
         if (sourceType === 'file') {
             const file = this.fileInput.files[0];
@@ -203,7 +225,8 @@ class VideoSourceSelector {
             this.onSelect({
                 sourceType: sourceType,
                 sourcePath: sourcePath,
-                file: sourceType === 'file' ? this.selectedFile : null
+                file: sourceType === 'file' ? this.selectedFile : null,
+                usePartnerAudio: usePartnerAudio
             });
         }
     }

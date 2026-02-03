@@ -13,9 +13,9 @@ Single reference for setup, usage, architecture, APIs, engagement detection, and
 - **AI chat**: Azure OpenAI (GPT-4), streaming, optional On Your Data
 - **Meeting coach**: Real-time insights from engagement state and B2B cues
 - **Engagement detection**: Video analysis → 30 signifiers → 4 groups (G1–G4) → score (0–100), combination-based insights, B2B opportunity detection
-- **Audiovisual insights**: Visual spikes + phrase-triggered (partner STT) + 24 B2B opportunity features → popup + TTS
+- **Audiovisual insights**: Visual spikes + phrase-triggered (partner STT) + 24 B2B opportunity features → popup + TTS. Combining facial and vocal cues (multimodal fusion) improves insight quality and is supported by research on engagement detection.
 - **Speech**: STT/TTS via Azure Speech; talking avatar with lip-sync (WebRTC)
-- **Video sources**: Webcam, Meeting Partner Video (share + audio), or file
+- **Video sources**: Webcam, Meeting Partner Video (share + audio), or file; optional meeting tab/window audio for speech cues when using webcam or file
 
 ### Project structure
 
@@ -82,7 +82,7 @@ pip install -r requirements.txt
 
 ### Configuration
 
-All settings are in `config.py`; override with environment variables (recommended for production).
+All settings are in `config.py`; override with environment variables (recommended for production). **API keys** (`AZURE_OPENAI_KEY`, `SPEECH_KEY`, `AZURE_FACE_API_KEY`) have no defaults and must be set via environment; do not commit real keys.
 
 | Area | Key variables |
 |------|----------------|
@@ -246,20 +246,22 @@ Attention, eye contact, facial expressiveness, head movement, symmetry, mouth ac
 
 **Composite-at-100** (legacy): When G1 (Interest), G4 (Decision-Ready), or overall composite score ≥ 90, a **composite_100 alert** is set. When any alert fires, next `GET /engagement/state` triggers insight generation (OpenAI) and returns the message in `alert.message`.
 
-### B2B opportunity detection
+### B2B opportunity detection (facial + multimodal)
 
 - **Source**: `utils/b2b_opportunity_detector.py`.  
-- **Input**: Group means G1–G4, group history, optional 30 signifier scores.  
+- **Input**: Group means G1–G4, group history, optional 30 signifier scores, **and** (for multimodal) recent speech tags from `services/insight_generator.get_recent_speech_tags(12)`.  
 - **Output**: First opportunity that fires (priority order) and is off cooldown → `(opportunity_id, context)`.  
-- **24 types** (examples): `closing_window`, `decision_ready`, `buying_signal`, `cognitive_overload_risk`, `confusion_moment`, `skepticism_surface`, `objection_moment`, `aha_moment`, `rapport_moment`, etc.  
+- **29 types**: Five **multimodal** composites (facial + speech) are checked first: `decision_readiness_multimodal`, `cognitive_overload_multimodal`, `skepticism_objection_multimodal`, `aha_insight_multimodal`, `disengagement_multimodal`. Then 24 facial-only composites (e.g. `closing_window`, `decision_ready`, `buying_signal`, `cognitive_overload_risk`, `aha_moment`, `rapport_moment`).  
+- **Multimodal corroboration**: Speech tags are appended when partner transcript matches trigger phrases (POST `/engagement/transcript`). Multimodal composites require both metric conditions **and** a matching recent speech tag (e.g. commitment/interest for decision-readiness, confusion/concern for cognitive overload). This reduces false positives and aligns with research on combined facial + speech cues.  
 - **Cooldown**: 32 s per opportunity type.  
-- **Flow**: Detector runs after spike check; if an opportunity fires, sets `_pending_alert` type `"opportunity"`; API calls `generate_insight_for_opportunity(...)` and returns message; same popup + TTS as spike/aural.
+- **Flow**: Engagement detector calls `detect_opportunity(..., recent_speech_tags=get_recent_speech_tags(12))`; if an opportunity fires, sets `_pending_alert` type `"opportunity"`; API calls `generate_insight_for_opportunity(...)` (context includes `recent_speech_tags` when applicable) and returns message; same popup + TTS as spike/aural.
 
 ### Audiovisual insights (speech + visual)
 
-- **Visual**: Spike or opportunity from engagement detector.  
-- **Aural**: When source is Meeting Partner Video with audio, frontend runs STT on partner stream and POSTs to `/engagement/transcript`. Backend checks for **trigger phrases** (objection, interest, confusion, commitment, concern, timeline, budget); on match sets **aural alert** (25 s cooldown).  
-- **Insight generation**: For spike, aural, or opportunity, backend uses Azure OpenAI with context (group/opportunity id, metrics, recent transcript) and returns one short sentence; fallback stock messages in `services/insight_generator.py`.  
+- **Visual**: Spike or opportunity from engagement detector (including multimodal composites when facial + speech conditions align).  
+- **Aural**: When source is Meeting Partner Video with audio, frontend runs STT on partner stream and POSTs to `/engagement/transcript`. Backend checks for **trigger phrases** (objection, interest, confusion, commitment, concern, timeline, budget, realization); on match **appends speech tag** (for composite detection) and sets **aural alert** (25 s cooldown).  
+- **Multimodal flow**: Speech tags (category + phrase + timestamp) are stored in a ring buffer; `get_recent_speech_tags(12)` returns tags from the last 12 s. The engagement detector passes these into `detect_opportunity()` so multimodal composites (e.g. decision-readiness when commitment/interest was just said + face matches) can fire.  
+- **Insight generation**: For spike, aural, or opportunity, backend uses Azure OpenAI with context (group/opportunity id, metrics, recent transcript, and for opportunities `recent_speech_tags` when present) and returns one short sentence; fallback stock messages in `services/insight_generator.py`.  
 - **Frontend**: Same handler for all alert types: show popup and speak `alert.message` via TTS.
 
 ### Psychology and metrics

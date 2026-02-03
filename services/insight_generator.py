@@ -56,6 +56,10 @@ PHRASE_CATEGORIES = {
         r"\bbudget\b", r"\bcost\b", r"\bpricing\b", r"\bexpensive\b",
         r"\bafford\b", r"\bprice point\b", r"\binvestment\b",
     ],
+    "realization": [
+        r"\baha\b", r"\boh I see\b", r"\bthat makes sense\b", r"\bgot it\b",
+        r"\bI get it\b", r"\bnow I understand\b", r"\bthat clicks\b", r"\bclicked\b",
+    ],
 }
 
 # Cooldown between phrase-triggered alerts (seconds)
@@ -63,6 +67,12 @@ AURAL_COOLDOWN_SEC = 25
 _pending_aural_alert: Optional[dict] = None
 _aural_alert_lock = threading.Lock()
 _last_aural_trigger_time: float = 0.0
+
+# Recent speech tags for multimodal composite detection (facial + speech)
+# Ring buffer: (category, phrase, timestamp); kept for SPEECH_TAGS_WINDOW_SEC
+SPEECH_TAGS_WINDOW_SEC = 12.0
+_recent_speech_tags: deque = deque(maxlen=50)
+_speech_tags_lock = threading.Lock()
 
 
 def _check_for_trigger_phrases(text: str) -> Optional[Tuple[str, str]]:
@@ -88,6 +98,30 @@ def _set_pending_aural_alert(category: str, phrase: str) -> bool:
         _pending_aural_alert = {"type": "aural", "category": category, "phrase": phrase}
         _last_aural_trigger_time = now
         return True
+
+
+def append_speech_tag(category: str, phrase: str) -> None:
+    """Append a speech tag (category, phrase, timestamp) for multimodal composite detection."""
+    with _speech_tags_lock:
+        _recent_speech_tags.append({"category": category, "phrase": phrase, "time": time.time()})
+
+
+def get_recent_speech_tags(within_sec: float = SPEECH_TAGS_WINDOW_SEC) -> list:
+    """
+    Return list of recent speech tags within the last within_sec seconds.
+    Each item: {"category": str, "phrase": str, "time": float}.
+    Thread-safe; used by composite detector for multimodal triggers.
+    """
+    now = time.time()
+    cutoff = now - within_sec
+    with _speech_tags_lock:
+        return [t for t in list(_recent_speech_tags) if t["time"] >= cutoff]
+
+
+def clear_recent_speech_tags() -> None:
+    """Clear recent speech tags (e.g. when engagement stops)."""
+    with _speech_tags_lock:
+        _recent_speech_tags.clear()
 
 
 def get_pending_aural_alert() -> Optional[dict]:
@@ -236,7 +270,28 @@ AURAL_STOCK_MESSAGES = {
 }
 
 # Fallbacks for B2B opportunity-triggered insights (visual/temporal cues) — Psychology-grounded
+# Multimodal composites (facial + speech) have dedicated stock messages.
 OPPORTUNITY_STOCK_MESSAGES = {
+    "decision_readiness_multimodal": (
+        "They're showing commitment in both words and expression—relaxed gaze, positive face, and language that signals readiness. "
+        "Ask for the next step or confirmation now."
+    ),
+    "cognitive_overload_multimodal": (
+        "Their face and words both point to overload—furrowed brow, gaze shifting, and confusion or concern in what they said. "
+        "Pause, simplify, or ask: 'What would help clarify this?'"
+    ),
+    "skepticism_objection_multimodal": (
+        "They've voiced a concern or objection and their face backs it up—tension, compressed lips, or averted gaze. "
+        "Address it directly: 'What's your main concern?' and listen before responding."
+    ),
+    "aha_insight_multimodal": (
+        "Something just landed—their expression shifted and they used language like 'got it' or 'that makes sense.' "
+        "Capitalize: 'How does this fit with what you need?' or reinforce the key point."
+    ),
+    "disengagement_multimodal": (
+        "Their face and lack of positive language suggest attention is drifting—low engagement cues and no recent commitment or interest phrases. "
+        "Re-engage with a direct question or shift to what matters to them."
+    ),
     "closing_window": (
         "Their face has settled—tension released, eyes steady. Decision's made internally. "
         "This window closes fast. Ask for the commitment or next step now."
@@ -561,8 +616,13 @@ def generate_insight_for_opportunity(
         "- Do not use 'B2B' or jargon\n"
         "- Sound like a real person who genuinely cares about their success"
     )
-    # Map opportunity IDs to psychology-grounded descriptions
+    # Map opportunity IDs to psychology-grounded descriptions (including multimodal)
     opportunity_context = {
+        "decision_readiness_multimodal": "partner's face and words both signal readiness—relaxed gaze, positive expression, commitment/interest language",
+        "cognitive_overload_multimodal": "face and speech both show overload—furrowed brow, gaze shifting, confusion or concern in what they said",
+        "skepticism_objection_multimodal": "they voiced objection or concern and face backs it—tension, lip compression, averted gaze",
+        "aha_insight_multimodal": "expression shifted and they used realization language (e.g. got it, that makes sense)—insight just landed",
+        "disengagement_multimodal": "low engagement cues and no recent positive language—attention may be drifting",
         "closing_window": "partner's face has relaxed, tension released—internal decision appears made",
         "decision_ready": "sustained eye contact, relaxed brow, subtle agreement cues—they're ready to commit",
         "ready_to_sign": "open posture, genuine smile, forward lean—all signals say yes",
@@ -608,6 +668,12 @@ def generate_insight_for_opportunity(
             user_parts.append(f"METRICS: {', '.join(cues)}.")
     if transcript_snippet:
         user_parts.append(f"SPEECH CONTEXT: \"{transcript_snippet}\"")
+    # For multimodal opportunities, include recent speech tags that triggered corroboration
+    if context and isinstance(context.get("recent_speech_tags"), list) and context["recent_speech_tags"]:
+        tags = context["recent_speech_tags"]
+        recent = [f"{t.get('category', '')}: \"{t.get('phrase', '')}\"" for t in tags[-5:] if t.get("category")]
+        if recent:
+            user_parts.append(f"RECENT SPEECH TAGS (corroborating): {'; '.join(recent)}.")
     user_parts.append("What would you whisper to the host? Be specific about the opportunity and what to do.")
 
     user_content = " ".join(user_parts)

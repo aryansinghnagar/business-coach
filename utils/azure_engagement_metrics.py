@@ -36,6 +36,23 @@ COMPOSITE_DEFINITIONS = {
 }
 
 
+def binarize_metrics(metrics_dict: Dict[str, float], up: float = 55.0) -> Dict[str, float]:
+    """
+    Convert continuous 0-100 metrics to strict 0 or 100 for display/API.
+    v >= up -> 100, else 0. Default 0 when missing/invalid.
+    """
+    if not metrics_dict or not isinstance(metrics_dict, dict):
+        return {}
+    out = {}
+    for k, v in metrics_dict.items():
+        try:
+            x = float(v)
+            out[k] = 100.0 if (np.isfinite(x) and x >= up) else 0.0
+        except (TypeError, ValueError):
+            out[k] = 0.0
+    return out
+
+
 def _get_emotions(face_result: Optional[FaceDetectionResult]) -> Dict[str, float]:
     """Return emotion dict with all keys in [0, 1]; missing keys = 0."""
     out = {k: 0.0 for k in EMOTION_KEYS}

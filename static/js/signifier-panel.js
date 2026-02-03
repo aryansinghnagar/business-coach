@@ -45,13 +45,9 @@ var SIGNIFIER_GROUPS = [
     { id: 'g4', title: 'Decision-Ready', keys: ['g4_relaxed_exhale', 'g4_fixed_gaze', 'g4_smile_transition'] }
 ];
 
+/** Two states only: detected (100) = active, else muted. */
 function getColorForScore(score) {
-    if (score <= 50) {
-        var r = 255, g = Math.round(255 * (score / 50)), b = 0;
-        return 'rgb(' + r + ',' + g + ',' + b + ')';
-    }
-    var r = Math.round(255 * (1 - (score - 50) / 50)), g = 255, b = 0;
-    return 'rgb(' + r + ',' + g + ',' + b + ')';
+    return (score === 100) ? '#22c55e' : '#64748b';
 }
 
 /** Real-time metric display (no smoothing). */
@@ -74,7 +70,7 @@ class SignifierPanel {
 
         var header = document.createElement('div');
         header.className = 'signifier-panel-header';
-        header.textContent = 'Engagement Metrics (30 signifiers)';
+        header.textContent = '';
         inner.appendChild(header);
 
         var groupsEl = document.createElement('div');
@@ -87,8 +83,29 @@ class SignifierPanel {
             groupDiv.setAttribute('data-group', gr.id);
 
             var title = document.createElement('div');
-            title.className = 'signifier-group-title';
-            title.textContent = gr.title;
+            title.className = 'signifier-group-title collapsible';
+            title.setAttribute('role', 'button');
+            title.setAttribute('aria-expanded', 'true');
+            title.setAttribute('tabindex', '0');
+            title.appendChild(document.createTextNode(gr.title + ' '));
+            var chevron = document.createElement('span');
+            chevron.className = 'chevron';
+            chevron.setAttribute('aria-hidden', 'true');
+            chevron.textContent = '\u25BC';
+            title.appendChild(chevron);
+            (function (groupEl, titleEl) {
+                title.addEventListener('click', function () {
+                    var collapsed = groupEl.classList.toggle('collapsed');
+                    titleEl.classList.toggle('collapsed', collapsed);
+                    titleEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                });
+                title.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault();
+                        title.click();
+                    }
+                });
+            }(groupDiv, title));
             groupDiv.appendChild(title);
 
             var list = document.createElement('div');
@@ -135,16 +152,10 @@ class SignifierPanel {
         for (var key in this.rows) {
             var r = this.rows[key];
             var v = scores[key];
-            var raw = (typeof v === 'number' && isFinite(v)) ? Math.max(0, Math.min(100, v)) : null;
-            if (raw !== null) {
-                var display = Math.max(0, Math.min(100, raw));
-                r.fill.style.width = display + '%';
-                r.fill.style.background = getColorForScore(display);
-                r.value.textContent = Math.round(display);
-            } else {
-                r.fill.style.width = '0%';
-                r.value.textContent = '--';
-            }
+            var isDetected = (typeof v === 'number' && isFinite(v) && v >= 50);
+            r.fill.style.width = isDetected ? '100%' : '0%';
+            r.fill.style.background = getColorForScore(isDetected ? 100 : 0);
+            r.value.textContent = isDetected ? 'Detected' : '\u2014';
         }
     }
 
@@ -153,7 +164,7 @@ class SignifierPanel {
         for (var key in this.rows) {
             var r = this.rows[key];
             r.fill.style.width = '0%';
-            r.value.textContent = '--';
+            r.value.textContent = '\u2014';
         }
     }
 }

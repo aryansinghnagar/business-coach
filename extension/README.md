@@ -35,9 +35,9 @@ This extension provides quick access to the Business Meeting Copilot application
    ```
    The app will run at `http://localhost:5000`
 
-2. **Open the app in the side panel (no new tab)**:
-   - **Chrome/Edge/Comet**: Click the extension icon — the side panel opens with the full app (video feed, engagement bar, chat, controls). The entire app runs in the panel; you do not need to open a new tab. You can be on any site (e.g. a meeting page).
-   - **Firefox**: Click the icon to open the sidebar; the full app runs there. No new tab required.
+2. **Open the app**:
+   - **Side panel**: Click the extension icon (or use the popup’s **"Open in side panel"** button). The full app runs in the panel; you can be on any site (e.g. a meeting page). Chrome/Edge/Comet use the side panel; Firefox uses the sidebar.
+   - **New tab**: Use the popup’s **"Open in new tab"** to open the app at `http://localhost:5000` in a new tab.
 
 ## Features
 
@@ -45,8 +45,7 @@ This extension provides quick access to the Business Meeting Copilot application
 - **Video-conferencing integration**: When the current tab is a meeting site (Google Meet, Zoom, Microsoft Teams, Webex, Whereby, GoToMeeting, Jitsi, Discord), the app shows an “Optimized for [name]” badge. The panel opens independently next to the meeting; it does not replace or take over the page.
 - **Panel mode**: When the app is loaded inside the extension’s side panel (iframe), it uses a compact layout that fills only the panel, so the sidebar appears independently on other websites.
 - **Video feed in sidebar**: The engagement video feed and avatar are in the app’s sidebar, so everything fits in the browser’s side panel.
-- **Side panel only**: Clicking the extension icon opens the side panel with the full app. No popup and no need to open a new tab; everything runs in the panel.
-- Side panel enabled for every tab (including new tabs) so it works on Meet, Zoom, Teams, etc.
+- **Side panel or new tab**: Open the app in the side panel (icon or popup) or in a new tab (popup). Side panel is enabled for every tab so it works on Meet, Zoom, Teams, etc.
 
 ## Troubleshooting
 
@@ -76,13 +75,9 @@ The extension requires permission to access `localhost:5000`. If you see permiss
 
 ## Development
 
-### Icon Generation
+### Icons
 
-Icons are generated using `create_icons.py`. To regenerate:
-```bash
-cd extension
-python create_icons.py
-```
+Icons are in `icons/` (16x16, 48x48, 128x128). Replace them as needed for your branding.
 
 ### Manifest Notes
 
@@ -97,4 +92,3 @@ python create_icons.py
 - `popup.html/css/js` - Extension popup interface
 - `sidepanel.html/js` - Side panel/sidebar content (iframe to localhost:5000)
 - `icons/` - Extension icons (16x16, 48x48, 128x128)
-- `create_icons.py` - Script to generate icon PNGs (run once to create icons)
