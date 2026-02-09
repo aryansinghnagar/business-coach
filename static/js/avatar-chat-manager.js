@@ -97,7 +97,7 @@ class AvatarChatManager {
             chatHistoryTextArea.innerHTML += imgUrlPath.trim() ? 'Assistant: ' : '<br/>Assistant: ';
         }
         
-        // Stream chat response
+        // Stream chat response (additional context is managed in the Dashboard)
         await this.sessionManager.streamChatResponse(
             this.messages,
             {
@@ -154,6 +154,11 @@ class AvatarChatManager {
         
         // Add assistant message
         this.messages.push({ role: 'assistant', content: result.assistantReply });
+        
+        // Refresh Context & AI sidebar (last context + response)
+        if (typeof window !== 'undefined' && window.refreshContextAndResponse) {
+            window.refreshContextAndResponse();
+        }
         
         // Finalize UI display
         if (this.enableDisplayTextAlignmentWithSpeech && this.displaySentence) {

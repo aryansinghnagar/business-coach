@@ -1,10 +1,10 @@
 /**
  * Azure Metrics Panel Module
  *
- * Displays Azure Face API engagement metrics when detection method is Azure Face API:
- * - Base emotions (anger, contempt, disgust, fear, happiness, neutral, sadness, surprise)
- * - B2B composite features (receptive, focused, interested, agreeable, open, skeptical,
- *   concerned, disagreeing, stressed, disengaged).
+ * Displays Azure Face API engagement metrics on a continuous 0-100 scale when detection
+ * method is Azure Face API: base emotions and B2B composite features. Each metric shows
+ * a label, a bar (width = score%), and the numeric score. Color bands: 0-39 muted,
+ * 40-69 medium, 70-100 high. No "detected" / "not detected"; all values are continuous.
  */
 
 var AZURE_BASE_LABELS = {
@@ -36,12 +36,18 @@ var AZURE_GROUPS = [
     { id: 'composite', title: 'B2B Composites', keys: ['receptive', 'focused', 'interested', 'agreeable', 'open', 'skeptical', 'concerned', 'disagreeing', 'stressed', 'disengaged'] }
 ];
 
-/** Two states only: detected (100) = active, else muted. */
+/**
+ * Continuous color by score: 0-39 muted, 40-69 medium, 70-100 high.
+ * @param {number} score - 0-100
+ * @returns {string} CSS color
+ */
 function getColorForScore(score) {
-    return (score === 100) ? '#22c55e' : '#64748b';
+    if (score >= 70) return '#22c55e';
+    if (score >= 40) return '#eab308';
+    return '#64748b';
 }
 
-/** Real-time metric display (no smoothing). */
+/** Real-time metric display; metrics are continuous 0-100, bar width = score%. */
 
 class AzureMetricsPanel {
     constructor(options) {
@@ -114,6 +120,11 @@ class AzureMetricsPanel {
         this.container.appendChild(inner);
     }
 
+    /**
+     * Update display from continuous 0-100 Azure metrics (base + composite).
+     * Bar width = score%; value = numeric score (rounded); color by bands (low/medium/high).
+     * @param {Object} azureMetrics - { base: {}, composite: {} }; values 0-100 (continuous).
+     */
     update(azureMetrics) {
         if (!azureMetrics || typeof azureMetrics !== 'object') {
             this.reset();
@@ -122,16 +133,22 @@ class AzureMetricsPanel {
         var base = azureMetrics.base && typeof azureMetrics.base === 'object' ? azureMetrics.base : {};
         var composite = azureMetrics.composite && typeof azureMetrics.composite === 'object' ? azureMetrics.composite : {};
         var allScores = Object.assign({}, base, composite);
-        var threshold = 55;
 
         for (var key in this.rows) {
             var r = this.rows[key];
             var v = allScores[key];
             var num = (typeof v === 'number' && isFinite(v)) ? v : (typeof v === 'string' ? parseFloat(v) : NaN);
-            var isDetected = (!isNaN(num) && num >= threshold);
-            r.fill.style.width = isDetected ? '100%' : '0%';
-            r.fill.style.background = getColorForScore(isDetected ? 100 : 0);
-            r.value.textContent = isDetected ? 'Detected' : '\u2014';
+            var normalized = (!isNaN(num)) ? Math.max(0, Math.min(100, num)) : NaN;
+            this.rawValues[key] = normalized;
+            if (isNaN(normalized)) {
+                r.fill.style.width = '0%';
+                r.fill.style.background = '#64748b';
+                r.value.textContent = '\u2014';
+            } else {
+                r.fill.style.width = normalized + '%';
+                r.fill.style.background = getColorForScore(normalized);
+                r.value.textContent = Math.round(normalized).toString();
+            }
         }
     }
 
@@ -140,6 +157,7 @@ class AzureMetricsPanel {
         for (var key in this.rows) {
             var r = this.rows[key];
             r.fill.style.width = '0%';
+            r.fill.style.background = '#64748b';
             r.value.textContent = '\u2014';
         }
     }

@@ -10,6 +10,14 @@ to predict engagement state and trigger insights. Based on cutting-edge research
 
 Opportunities are evaluated in priority order; the first that fires (and passes cooldown)
 is returned. All thresholds use the 0–100 scale (G1, G2, G3, G4; G3 = 100 - resistance_raw).
+
+Client retention strategy:
+- Negative opportunities (confusion, skepticism, objection, resistance, disengagement, cognitive
+  overload) are prioritized: lower detection thresholds and shorter cooldowns so the user can
+  address concerns before the client voices them.
+- Positive opportunities (closing, decision-ready, buying signal, rapport) use higher thresholds
+  and longer cooldowns to reduce popup frequency while still surfacing strong moments to close
+  or improve perception.
 """
 
 import time
@@ -18,25 +26,31 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+try:
+    import config as _config
+except Exception:
+    _config = None
+
 # Type for recent speech tags (from insight_generator.get_recent_speech_tags)
 SpeechTag = Dict[str, Any]  # {"category": str, "phrase": str, "time": float}
 
-# Cooldown per opportunity type (seconds)
-OPPORTUNITY_COOLDOWN_SEC = 32
+# Cooldowns by polarity (config overrides if present)
+NEGATIVE_OPPORTUNITY_COOLDOWN_SEC = float(getattr(_config, "NEGATIVE_OPPORTUNITY_COOLDOWN_SEC", 14))
+POSITIVE_OPPORTUNITY_COOLDOWN_SEC = float(getattr(_config, "POSITIVE_OPPORTUNITY_COOLDOWN_SEC", 50))
 _HISTORY_LEN = 12
 
-# Priority order: multimodal (facial + speech) first when corroborated, then closing/decision, then resistance/confusion, then interest/rapport
-OPPORTUNITY_PRIORITY: List[str] = [
-    "decision_readiness_multimodal",
+# Negative = risk to relationship/deal; surface more readily (shorter cooldown, lower thresholds)
+NEGATIVE_OPPORTUNITY_IDS: set = {
     "cognitive_overload_multimodal",
     "skepticism_objection_multimodal",
-    "aha_insight_multimodal",
     "disengagement_multimodal",
-    "closing_window",
-    "decision_ready",
-    "ready_to_sign",
-    "buying_signal",
-    "commitment_cue",
+    "confusion_multimodal",
+    "tension_objection_multimodal",
+    "loss_of_interest",
+    "acoustic_disengagement_risk",
+    "acoustic_uncertainty",
+    "acoustic_tension",
+    "acoustic_roughness_proxy",
     "cognitive_overload_risk",
     "confusion_moment",
     "need_clarity",
@@ -45,6 +59,56 @@ OPPORTUNITY_PRIORITY: List[str] = [
     "resistance_peak",
     "hesitation_moment",
     "disengagement_risk",
+}
+# Positive = moments to capitalize; require stronger evidence, longer cooldown
+POSITIVE_OPPORTUNITY_IDS: set = {
+    "decision_readiness_multimodal",
+    "aha_insight_multimodal",
+    "closing_window",
+    "decision_ready",
+    "ready_to_sign",
+    "buying_signal",
+    "commitment_cue",
+    "objection_fading",
+    "aha_moment",
+    "re_engagement_opportunity",
+    "alignment_cue",
+    "genuine_interest",
+    "listening_active",
+    "trust_building_moment",
+    "urgency_sensitive",
+    "processing_deep",
+    "attention_peak",
+    "rapport_moment",
+}
+
+# Priority order: all NEGATIVE first so we don't miss concerns, then positive
+OPPORTUNITY_PRIORITY: List[str] = [
+    "cognitive_overload_multimodal",
+    "skepticism_objection_multimodal",
+    "disengagement_multimodal",
+    "confusion_multimodal",
+    "tension_objection_multimodal",
+    "loss_of_interest",
+    "acoustic_disengagement_risk",
+    "acoustic_uncertainty",
+    "acoustic_tension",
+    "acoustic_roughness_proxy",
+    "cognitive_overload_risk",
+    "confusion_moment",
+    "need_clarity",
+    "skepticism_surface",
+    "objection_moment",
+    "resistance_peak",
+    "hesitation_moment",
+    "disengagement_risk",
+    "decision_readiness_multimodal",
+    "aha_insight_multimodal",
+    "closing_window",
+    "decision_ready",
+    "ready_to_sign",
+    "buying_signal",
+    "commitment_cue",
     "objection_fading",
     "aha_moment",
     "re_engagement_opportunity",
@@ -65,6 +129,19 @@ MULTIMODAL_OPPORTUNITY_IDS: set = {
     "skepticism_objection_multimodal",
     "aha_insight_multimodal",
     "disengagement_multimodal",
+    "confusion_multimodal",
+    "tension_objection_multimodal",
+}
+
+# Opportunity IDs that need composite_metrics and/or acoustic_tags (passed to evaluator)
+COMPOSITE_ACOUSTIC_OPPORTUNITY_IDS: set = {
+    "confusion_multimodal",
+    "tension_objection_multimodal",
+    "loss_of_interest",
+    "acoustic_disengagement_risk",
+    "acoustic_uncertainty",
+    "acoustic_tension",
+    "acoustic_roughness_proxy",
 }
 
 _last_fire_time: Dict[str, float] = {}
@@ -87,8 +164,10 @@ def _hist_list(key: str) -> List[float]:
 
 
 def _check_cooldown(opportunity_id: str, now: float) -> bool:
+    """Use shorter cooldown for negative (retention), longer for positive (reduce frequency)."""
     t = _last_fire_time.get(opportunity_id, 0.0)
-    return (now - t) >= OPPORTUNITY_COOLDOWN_SEC
+    sec = NEGATIVE_OPPORTUNITY_COOLDOWN_SEC if opportunity_id in NEGATIVE_OPPORTUNITY_IDS else POSITIVE_OPPORTUNITY_COOLDOWN_SEC
+    return (now - t) >= sec
 
 
 def _fire(opportunity_id: str, now: float) -> None:
@@ -104,112 +183,125 @@ def _has_recent_category(speech_tags: List[SpeechTag], categories: List[str]) ->
 
 
 def _eval_closing_window(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """Positive: higher threshold to reduce frequency; only clear closing signals."""
     if len(hist["g4"]) < 6:
         return False
     h4 = hist["g4"]
-    if g4 >= 60 and (g4 - min(h4)) >= 16 and g3 >= 55:
+    if g4 >= 65 and (g4 - min(h4)) >= 18 and g3 >= 55:
         return True
     return False
 
 
 def _eval_decision_ready(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Decision-ready = high commitment signals (G4) + positive engagement (G1) + 
-    low resistance (G3 high). Cialdini's commitment/consistency: once nonverbal yes, primed to act.
+    Psychology: Decision-ready = high commitment (G4) + positive engagement (G1) + low resistance.
+    Positive: higher threshold so positive insights only when multiple strong signals.
     """
-    return g4 >= 62 and g1 >= 56 and g3 >= 58
+    return g4 >= 70 and g1 >= 62 and g3 >= 62
 
 
 def _eval_ready_to_sign(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Ready to sign = high commitment (G4) + LOW cognitive load (G2 < 50) + 
-    low resistance. Decision made, no internal conflict. Kahneman: System 1 (intuitive) yes.
+    Psychology: Ready to sign = high commitment (G4) + LOW cognitive load (G2 < 50) +
+    low resistance. Positive: higher threshold to reduce frequency.
     """
-    return g4 >= 65 and g2 < 50 and g3 >= 56
+    return g4 >= 70 and g2 < 50 and g3 >= 58
 
 
 def _eval_buying_signal(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
     Psychology: Buying signal = high interest (G1) + decision cues (G4) + low resistance.
-    Approach motivation (Riskind & Gotay): forward lean, Duchenne smile, eye contact = desire.
+    Positive: higher threshold so we only surface on clear multiple positive signals.
     """
-    return g1 >= 60 and g4 >= 52 and g3 >= 58
+    return g1 >= 66 and g4 >= 60 and g3 >= 62
 
 
 def _eval_commitment_cue(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
+    """Positive: higher threshold to reduce frequency."""
     if len(hist["g4"]) < 4:
         return False
-    return g4 >= 58 and np.mean(hist["g4"][-4:]) >= 56 and g3 >= 56
+    return g4 >= 62 and np.mean(hist["g4"][-4:]) >= 58 and g3 >= 58
 
 
 def _eval_cognitive_overload_risk(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Cognitive overload = high G2 (furrowed brow, gaze aversion, stillness) + 
-    LOW G1 (not engaged). Kahneman's System 2 maxed out. Decision fatigue risk.
+    Psychology: Cognitive overload = high G2 + LOW G1. Negative: lower threshold for early catch.
     """
-    return g2 >= 58 and g1 < 52
+    return g2 >= 54 and g1 < 54
 
 
 def _eval_confusion_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Confusion = high cognitive load (G2) + resistance surfacing (G3 raw high) OR
-    sudden G2 spike. AU4 (furrowed brow) communicates "problem understanding" (2025 research).
+    Psychology: Confusion = high G2 + resistance or G2 spike. Negative: lower threshold so we don't miss.
     """
     r = _g3_raw(g3)
-    return g2 >= 58 and (r >= 48 or (len(hist["g2"]) >= 4 and g2 > np.mean(hist["g2"][:-2])))
+    return g2 >= 53 and (r >= 46 or (len(hist["g2"]) >= 4 and g2 > np.mean(hist["g2"][:-2])))
 
 
 def _eval_need_clarity(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Need clarity = moderate cognitive load (G2) + low engagement (G1).
-    Processing but not connecting. Requires simplification or recap.
+    Psychology: Need clarity = moderate G2 + low G1. Negative: lower threshold so we don't miss subtle need.
     """
-    return g2 >= 55 and g1 < 56
+    return g2 >= 50 and g1 < 60
 
 
 def _eval_skepticism_surface(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Skepticism = resistance (G3 raw) RISING over time. Asymmetric expressions
-    (contempt), lip compression, nose wrinkle. Mehrabian: nonverbal leakage reveals true sentiment.
+    Psychology: Skepticism = resistance rising. Negative: lower threshold for early catch.
     """
     r = _g3_raw(g3)
     if len(hist["g3"]) < 4:
-        return r >= 50
+        return r >= 46
     mean_g3 = np.mean(hist["g3"][:-1])
     r_prev = 100.0 - mean_g3
-    return r >= 50 and r > r_prev + 4
+    return r >= 46 and r > r_prev + 3
 
 
 def _eval_objection_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Objection = moderate-high resistance (G3 raw). Requires validation before
-    persuasion (Rogers). Resistance drops when they feel heard.
+    Psychology: Objection = moderate-high resistance. Negative: lower threshold for early catch.
+    Temporal consistency: require G3_raw >= 48 in at least 2 of last 3 frames (group_history)
+    so one-frame spikes do not fire.
     """
-    return _g3_raw(g3) >= 52
+    r = _g3_raw(g3)
+    if r < 48:
+        return False
+    if len(hist["g3"]) < 3:
+        return True
+    # 2 of last 3 frames with G3_raw >= 48 (i.e. G3 <= 52)
+    recent = hist["g3"][-3:]
+    count_high_r = sum(1 for g in recent if _g3_raw(g) >= 48)
+    return count_high_r >= 2
 
 
 def _eval_resistance_peak(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Resistance peak = high G3 raw (contempt, lip compression, gaze aversion).
-    Approach-avoidance conflict. Don't push—acknowledge and pivot.
+    Psychology: Resistance peak = high G3 raw. Negative: lower threshold for early catch.
+    Temporal consistency: require G3_raw >= 52 in at least 2 of last 3 frames so one-frame
+    spikes do not fire.
     """
-    return _g3_raw(g3) >= 56
+    r = _g3_raw(g3)
+    if r < 52:
+        return False
+    if len(hist["g3"]) < 3:
+        return True
+    recent = hist["g3"][-3:]
+    count_high_r = sum(1 for g in recent if _g3_raw(g) >= 52)
+    return count_high_r >= 2
 
 
 def _eval_hesitation_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Hesitation = moderate cognitive load (G2) + moderate resistance (G3 raw).
-    On the fence. Lower stakes or address concern.
+    Psychology: Hesitation = moderate G2 + moderate resistance. Negative: lower threshold.
     """
-    return g2 >= 54 and _g3_raw(g3) >= 46
+    return g2 >= 52 and _g3_raw(g3) >= 44
 
 
 def _eval_disengagement_risk(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Disengagement = LOW interest (G1) + moderate resistance (G3 raw).
-    Attention slipping. Re-engage with question or shift topic.
+    Psychology: Disengagement = LOW G1 + moderate resistance. Negative: lower threshold to catch slippage.
     """
-    return g1 < 46 and _g3_raw(g3) >= 48
+    return g1 < 52 and _g3_raw(g3) >= 44
 
 
 def _eval_objection_fading(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
@@ -221,53 +313,49 @@ def _eval_objection_fading(g1: float, g2: float, g3: float, g4: float, hist: Dic
 
 def _eval_aha_moment(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Aha moment = WAS processing (G2 high recently) -> NOW engaged (G1 high).
-    Insight just landed. Eyes widen, brows raise, genuine smile. Capitalize immediately.
+    Psychology: Aha = was processing -> now engaged. Positive: modestly higher bar.
     """
     if len(hist["g1"]) < 3 or len(hist["g2"]) < 3:
         return False
     g2_ago = hist["g2"][-2]
-    return g2_ago >= 55 and g1 >= 58 and g3 >= 54
+    return g2_ago >= 56 and g1 >= 60 and g3 >= 56
 
 
 def _eval_re_engagement_opportunity(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Re-engagement = WAS disengaged (G1 low) -> NOW attention returning (G1 rising).
-    Strike while attention is refocused. Ask question or deliver key point.
+    Psychology: Re-engagement = was disengaged -> attention returning. Positive: slightly higher g1.
     """
     if len(hist["g1"]) < 6:
         return False
-    return min(hist["g1"]) < 45 and g1 >= 50
+    return min(hist["g1"]) < 44 and g1 >= 52
 
 
 def _eval_alignment_cue(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
     """
-    Psychology: Alignment = BOTH interest (G1) AND commitment (G4) rising together over time.
-    Nodding, mirroring, warm eye contact. Shared goals emerging. Propose next step.
+    Psychology: Alignment = G1 and G4 rising together. Positive: require slightly larger rise.
     """
     if len(hist["g1"]) < 6 or len(hist["g4"]) < 6:
         return False
-    return (g1 - hist["g1"][0]) >= 10 and (g4 - hist["g4"][0]) >= 10
+    return (g1 - hist["g1"][0]) >= 12 and (g4 - hist["g4"][0]) >= 12
 
 
 def _eval_genuine_interest(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
-    """
-    Psychology: Genuine interest = high G1 (Duchenne smile, forward lean, eye contact) + 
-    low resistance (G3 high). Authentic engagement markers. Approach motivation.
-    """
-    return g1 >= 58 and g3 >= 56
+    """Psychology: Genuine interest = high G1 + low resistance. Positive: higher threshold for multi-signal."""
+    return g1 >= 64 and g3 >= 60
 
 
 def _eval_listening_active(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
-    return g1 >= 55 and g3 >= 54
+    """Positive: slightly higher bar to reduce frequency."""
+    return g1 >= 57 and g3 >= 56
 
 
 def _eval_trust_building_moment(
     g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]], sig: Optional[Dict[str, float]] = None
 ) -> bool:
+    """Positive: higher threshold to reduce frequency."""
     if sig is not None and sig.get("g1_facial_symmetry", 0) >= 55:
-        return g1 >= 54 and g3 >= 58
-    return g1 >= 54 and g3 >= 58
+        return g1 >= 58 and g3 >= 58
+    return g1 >= 58 and g3 >= 58
 
 
 def _eval_urgency_sensitive(g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]]) -> bool:
@@ -281,17 +369,19 @@ def _eval_processing_deep(g1: float, g2: float, g3: float, g4: float, hist: Dict
 def _eval_attention_peak(
     g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]], sig: Optional[Dict[str, float]] = None
 ) -> bool:
+    """Positive: higher threshold to reduce frequency."""
     if sig is not None and sig.get("g1_eye_contact", 0) >= 58:
-        return g1 >= 60
-    return g1 >= 62
+        return g1 >= 64
+    return g1 >= 66
 
 
 def _eval_rapport_moment(
     g1: float, g2: float, g3: float, g4: float, hist: Dict[str, List[float]], sig: Optional[Dict[str, float]] = None
 ) -> bool:
+    """Positive: higher threshold to reduce frequency."""
     if sig is not None and sig.get("g1_facial_symmetry", 0) >= 52:
-        return g1 >= 54
-    return g1 >= 56
+        return g1 >= 58
+    return g1 >= 60
 
 
 # ----- Multimodal composites (facial + speech; require recent_speech_tags) -----
@@ -302,13 +392,10 @@ def _eval_decision_readiness_multimodal(
     hist: Dict[str, List[float]],
     speech_tags: List[SpeechTag],
 ) -> bool:
-    """
-    Decision-readiness with speech corroboration: sustained G4 + G1 + commitment/interest language.
-    Research: Cialdini commitment/consistency; verbal + nonverbal yes = ready to act.
-    """
+    """Decision-readiness with speech. Positive: higher threshold."""
     if not _has_recent_category(speech_tags, ["commitment", "interest"]):
         return False
-    return g4 >= 60 and g1 >= 56 and g3 >= 56
+    return g4 >= 64 and g1 >= 58 and g3 >= 58
 
 
 def _eval_cognitive_overload_multimodal(
@@ -316,13 +403,10 @@ def _eval_cognitive_overload_multimodal(
     hist: Dict[str, List[float]],
     speech_tags: List[SpeechTag],
 ) -> bool:
-    """
-    Cognitive overload with speech corroboration: high G2 + confusion/concern language.
-    Research: Kahneman System 2 maxed; hesitation/confusion words + furrowed brow = overload.
-    """
+    """Cognitive overload with speech. Negative: lower threshold for early catch."""
     if not _has_recent_category(speech_tags, ["confusion", "concern"]):
         return False
-    return g2 >= 56 and g1 < 54
+    return g2 >= 53 and g1 < 56
 
 
 def _eval_skepticism_objection_multimodal(
@@ -330,13 +414,10 @@ def _eval_skepticism_objection_multimodal(
     hist: Dict[str, List[float]],
     speech_tags: List[SpeechTag],
 ) -> bool:
-    """
-    Skepticism/objection with speech corroboration: G3 resistance + objection/concern language.
-    Research: Mehrabian nonverbal leakage; verbal objection + lip compression/contempt = address it.
-    """
+    """Skepticism/objection with speech. Negative: lower threshold for early catch."""
     if not _has_recent_category(speech_tags, ["objection", "concern"]):
         return False
-    return _g3_raw(g3) >= 48
+    return _g3_raw(g3) >= 44
 
 
 def _eval_aha_insight_multimodal(
@@ -344,16 +425,13 @@ def _eval_aha_insight_multimodal(
     hist: Dict[str, List[float]],
     speech_tags: List[SpeechTag],
 ) -> bool:
-    """
-    Aha/insight moment with speech corroboration: G1 spike + interest/realization language.
-    Research: Eyebrow flash + "got it" / "that makes sense" = insight just landed.
-    """
+    """Aha/insight with speech. Positive: slightly higher bar."""
     if not _has_recent_category(speech_tags, ["interest", "realization"]):
         return False
     if len(hist["g1"]) < 3 or len(hist["g2"]) < 3:
         return False
     g2_ago = hist["g2"][-2]
-    return g2_ago >= 52 and g1 >= 58 and g3 >= 54
+    return g2_ago >= 53 and g1 >= 60 and g3 >= 55
 
 
 def _eval_disengagement_multimodal(
@@ -361,13 +439,124 @@ def _eval_disengagement_multimodal(
     hist: Dict[str, List[float]],
     speech_tags: List[SpeechTag],
 ) -> bool:
-    """
-    Disengagement with lack of positive speech: low G1/G4 + no recent commitment/interest.
-    Research: Gaze drift + flat face + no engagement language = attention slipping.
-    """
+    """Disengagement with lack of positive speech. Negative: lower threshold for early catch."""
     if _has_recent_category(speech_tags, ["commitment", "interest"]):
-        return False  # Positive speech recently = not disengaged
-    return g1 < 46 and g4 < 50 and _g3_raw(g3) >= 44
+        return False
+    return g1 < 48 and g4 < 52 and _g3_raw(g3) >= 42
+
+
+# ----- Composite + acoustic opportunity evaluators (need composite_metrics, acoustic_tags) -----
+
+
+def _eval_confusion_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Confusion: speech confusion/concern AND (G2 high or composite confusion_multimodal high). Negative."""
+    if not _has_recent_category(speech_tags, ["confusion", "concern"]):
+        return False
+    comp = composite_metrics or {}
+    if comp.get("confusion_multimodal", 0) >= 55:
+        return True
+    return g2 >= 50
+
+
+def _eval_tension_objection_multimodal(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Tension/objection: G3 raw elevated AND (recent objection/concern or composite high). Negative."""
+    if _g3_raw(g3) < 42:
+        return False
+    if _has_recent_category(speech_tags, ["objection", "concern"]):
+        return True
+    comp = composite_metrics or {}
+    return comp.get("tension_objection_multimodal", 0) >= 55
+
+
+def _eval_loss_of_interest(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Loss of interest: composite loss_of_interest_multimodal high OR (G1 low + no commit/interest + acoustic withdrawal). Negative."""
+    comp = composite_metrics or {}
+    if comp.get("loss_of_interest_multimodal", 0) >= 58:
+        return True
+    if g1 >= 50:
+        return False
+    if _has_recent_category(speech_tags, ["commitment", "interest"]):
+        return False
+    ac = set(acoustic_tags or [])
+    if "acoustic_disengagement_risk" in ac:
+        return True
+    return g1 < 45 and not _has_recent_category(speech_tags, ["commitment", "interest"])
+
+
+def _eval_acoustic_disengagement_risk(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Voice suggests disengagement and face not highly engaged. Negative: don't miss withdrawal."""
+    ac = set(acoustic_tags or [])
+    if "acoustic_disengagement_risk" not in ac:
+        return False
+    return g1 < 60
+
+
+def _eval_acoustic_uncertainty(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Voice uncertainty + (elevated G2 or recent confusion/concern). Negative."""
+    ac = set(acoustic_tags or [])
+    if "acoustic_uncertainty" not in ac:
+        return False
+    if g2 >= 50:
+        return True
+    return _has_recent_category(speech_tags, ["confusion", "concern"])
+
+
+def _eval_acoustic_tension(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Voice tension + resistance. Negative."""
+    ac = set(acoustic_tags or [])
+    if "acoustic_tension" not in ac:
+        return False
+    return _g3_raw(g3) >= 40
+
+
+def _eval_acoustic_roughness_proxy(
+    g1: float, g2: float, g3: float, g4: float,
+    hist: Dict[str, List[float]],
+    speech_tags: List[SpeechTag],
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
+) -> bool:
+    """Voice roughness proxy (strain/tension). Negative."""
+    ac = set(acoustic_tags or [])
+    if "acoustic_roughness_proxy" not in ac:
+        return False
+    return _g3_raw(g3) >= 35
 
 
 _EVALUATORS: Dict[str, Any] = {
@@ -376,6 +565,13 @@ _EVALUATORS: Dict[str, Any] = {
     "skepticism_objection_multimodal": _eval_skepticism_objection_multimodal,
     "aha_insight_multimodal": _eval_aha_insight_multimodal,
     "disengagement_multimodal": _eval_disengagement_multimodal,
+    "confusion_multimodal": _eval_confusion_multimodal,
+    "tension_objection_multimodal": _eval_tension_objection_multimodal,
+    "loss_of_interest": _eval_loss_of_interest,
+    "acoustic_disengagement_risk": _eval_acoustic_disengagement_risk,
+    "acoustic_uncertainty": _eval_acoustic_uncertainty,
+    "acoustic_tension": _eval_acoustic_tension,
+    "acoustic_roughness_proxy": _eval_acoustic_roughness_proxy,
     "closing_window": _eval_closing_window,
     "decision_ready": _eval_decision_ready,
     "ready_to_sign": _eval_ready_to_sign,
@@ -409,6 +605,8 @@ def detect_opportunity(
     signifier_scores: Optional[Dict[str, float]] = None,
     now: Optional[float] = None,
     recent_speech_tags: Optional[List[SpeechTag]] = None,
+    composite_metrics: Optional[Dict[str, float]] = None,
+    acoustic_tags: Optional[List[str]] = None,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     """
     Evaluate B2B opportunity features in priority order. Returns (opportunity_id, context) for the
@@ -416,10 +614,12 @@ def detect_opportunity(
 
     Args:
         group_means: Current G1, G2, G3, G4 (0–100).
-        group_history: Optional dict of deques (g1, g2, g3, g4) for temporal logic. If None, internal history is used (must be updated via update_history).
-        signifier_scores: Optional 30 signifier scores for features that use eye_contact, symmetry, etc.
+        group_history: Optional dict of deques (g1, g2, g3, g4) for temporal logic.
+        signifier_scores: Optional 30 signifier scores.
         now: Timestamp for cooldown; defaults to time.time().
-        recent_speech_tags: Optional list of recent speech tags (category, phrase, time) for multimodal composites.
+        recent_speech_tags: Optional list of recent speech tags for multimodal composites.
+        composite_metrics: Optional composite metrics (confusion_multimodal, tension_objection_multimodal, etc.).
+        acoustic_tags: Optional list of acoustic tags (e.g. from get_recent_acoustic_tags()).
 
     Returns:
         (opportunity_id, context) or None.
@@ -438,10 +638,11 @@ def detect_opportunity(
     else:
         _update_history(group_means)
 
-    # Build hist once per call and reuse for all evaluators (avoids repeated list copies).
     hist = {k: _hist_list(k) for k in ("g1", "g2", "g3", "g4")}
     sig = signifier_scores
     speech_tags = recent_speech_tags if recent_speech_tags is not None else []
+    comp = composite_metrics
+    ac_tags = acoustic_tags if acoustic_tags is not None else []
 
     for oid in OPPORTUNITY_PRIORITY:
         if not _check_cooldown(oid, now):
@@ -450,7 +651,9 @@ def detect_opportunity(
         if fn is None:
             continue
         try:
-            if oid in MULTIMODAL_OPPORTUNITY_IDS:
+            if oid in COMPOSITE_ACOUSTIC_OPPORTUNITY_IDS:
+                fired = fn(g1, g2, g3, g4, hist, speech_tags, comp, ac_tags)
+            elif oid in MULTIMODAL_OPPORTUNITY_IDS:
                 fired = fn(g1, g2, g3, g4, hist, speech_tags)
             elif oid in ("trust_building_moment", "attention_peak", "rapport_moment"):
                 fired = fn(g1, g2, g3, g4, hist, sig)
@@ -462,6 +665,8 @@ def detect_opportunity(
                     "g1": g1, "g2": g2, "g3": g3, "g4": g4,
                     "signifier_scores": sig,
                     "recent_speech_tags": speech_tags,
+                    "composite_metrics": comp,
+                    "acoustic_tags": ac_tags,
                 }
                 return (oid, context)
         except Exception:

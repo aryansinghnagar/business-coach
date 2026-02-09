@@ -58,7 +58,7 @@ class VideoSourceSelector {
                         <div class="video-source-icon">🖥️</div>
                         <div class="video-source-info">
                             <h3>Meeting Partner Video</h3>
-                            <p>Share screen and select the meeting tab or window (e.g. pin one participant in Meet, Teams, or Zoom) so we analyze their video.</p>
+                            <p>After clicking Start Detection, the browser will ask you to choose what to share (tab, window, or screen) and whether to share audio. Select the meeting tab or window (e.g. pin one participant in Meet, Teams, or Zoom) and enable audio for facial and speech cues.</p>
                         </div>
                         <div class="video-source-radio">
                             <input type="radio" name="videoSource" value="partner" id="sourcePartner">
@@ -91,7 +91,11 @@ class VideoSourceSelector {
                 <div class="video-source-audio-option" id="partnerAudioOptionContainer">
                     <label class="video-source-checkbox-label">
                         <input type="checkbox" id="usePartnerAudioCheckbox" name="usePartnerAudio">
-                        <span>Use meeting tab/window audio for speech cues (recommended for richer insights)</span>
+                        <span>Use meeting tab/window audio for speech and voice-tone cues (recommended for richer insights)</span>
+                    </label>
+                    <label class="video-source-checkbox-label">
+                        <input type="checkbox" id="useMicrophoneAudioCheckbox" name="useMicrophoneAudio">
+                        <span>Use microphone for speech cues and acoustic analysis (e.g. for testing)</span>
                     </label>
                     <p class="video-source-audio-note" id="partnerAudioIncludedNote" style="display: none;">Partner audio is included automatically.</p>
                 </div>
@@ -133,13 +137,31 @@ class VideoSourceSelector {
                         partnerAudioCheckbox.checked = false;
                         partnerAudioCheckbox.disabled = true;
                     }
+                    const micCheckbox = this.modal.querySelector('#useMicrophoneAudioCheckbox');
+                    if (micCheckbox) {
+                        micCheckbox.checked = false;
+                        micCheckbox.disabled = true;
+                    }
                     if (partnerAudioNote) partnerAudioNote.style.display = 'block';
                 } else {
                     if (partnerAudioCheckbox) partnerAudioCheckbox.disabled = false;
+                    const micCheckbox = this.modal.querySelector('#useMicrophoneAudioCheckbox');
+                    if (micCheckbox) micCheckbox.disabled = false;
                     if (partnerAudioNote) partnerAudioNote.style.display = 'none';
                 }
             });
         });
+        // Mutual exclusivity: microphone vs tab/window audio (for webcam/file only)
+        const partnerAudioCheckbox = this.modal.querySelector('#usePartnerAudioCheckbox');
+        const micCheckbox = this.modal.querySelector('#useMicrophoneAudioCheckbox');
+        if (partnerAudioCheckbox && micCheckbox) {
+            partnerAudioCheckbox.addEventListener('change', () => {
+                if (partnerAudioCheckbox.checked) micCheckbox.checked = false;
+            });
+            micCheckbox.addEventListener('change', () => {
+                if (micCheckbox.checked) partnerAudioCheckbox.checked = false;
+            });
+        }
         
         // File input
         this.fileInput = this.modal.querySelector('#videoFileInput');
@@ -204,7 +226,9 @@ class VideoSourceSelector {
         const sourceType = selectedRadio.value;
         let sourcePath = null;
         const partnerAudioCheckbox = this.modal.querySelector('#usePartnerAudioCheckbox');
+        const micAudioCheckbox = this.modal.querySelector('#useMicrophoneAudioCheckbox');
         const usePartnerAudio = sourceType === 'partner' ? true : (partnerAudioCheckbox ? partnerAudioCheckbox.checked : false);
+        const useMicrophoneAudio = (sourceType === 'webcam' || sourceType === 'file') && micAudioCheckbox && micAudioCheckbox.checked;
         
         if (sourceType === 'file') {
             const file = this.fileInput.files[0];
@@ -226,7 +250,8 @@ class VideoSourceSelector {
                 sourceType: sourceType,
                 sourcePath: sourcePath,
                 file: sourceType === 'file' ? this.selectedFile : null,
-                usePartnerAudio: usePartnerAudio
+                usePartnerAudio: usePartnerAudio,
+                useMicrophoneAudio: useMicrophoneAudio
             });
         }
     }

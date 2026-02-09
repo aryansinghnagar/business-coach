@@ -5,13 +5,12 @@ Loads pre-trained weights for the 30 expression signifiers and 4 group weights
 from an ML backend (URL), local file, or uses built-in defaults. Used by
 ExpressionSignifierEngine for weighted individual and overall score calculation.
 
-Psychology-informed defaults (2020s research):
-- Eye contact: strong correlate of shared attention and engagement (PNAS 2021).
-- Head tilt/nod: signals interest and rapport; head movements hard to fake.
-- Duchenne: eye constriction weakly predicts positive emotion; de-weighted.
-- Gaze aversion, lip compression: robust resistance cues.
-- Smile transition + relaxed exhale: decision-ready indicators.
-- Cognitive load (G2): look away, thinking brow valid; context-dependent.
+Psychology-informed defaults; research refinement (FACS, Mehrabian, Cialdini, Kahneman):
+- Eye contact: strong correlate of trust and engagement (Mehrabian; 70-80% ideal in 1:1)—up-weighted.
+- Duchenne (AU6+AU12): genuine positive affect (Ekman & Friesen)—up-weighted.
+- Gaze aversion (sustained), lip compression, contempt: robust resistance/disengagement cues—up-weighted.
+- G4 (fixed_gaze, relaxed_exhale, smile_transition): decision/commitment signals (Cialdini)—up-weighted.
+- Pupil dilation: noisy proxy—de-weighted. Chin stroke, mouth cover: placeholders—de-weighted.
 
 JSON format:
   {"signifier": [w1..w30], "group": [W1, W2, W3, W4], optional "fusion": {"azure": float, "mediapipe": float}}
@@ -28,29 +27,31 @@ except ImportError:
 
 import config
 
-# Must match ExpressionSignifierEngine._all_keys() order
+# Must match ExpressionSignifierEngine._all_keys() / expression_signifiers.SIGNIFIER_KEYS order
 SIGNIFIER_KEYS_ORDER: List[str] = [
     "g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
     "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead",
+    "g1_micro_smile", "g1_brow_raise_sustained", "g1_mouth_open_receptive", "g1_eye_widening", "g1_nod_intensity",
     "g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
-    "g2_stillness", "g2_lowered_brow",
+    "g2_stillness", "g2_lowered_brow", "g2_brow_furrow_deep", "g2_gaze_shift_frequency", "g2_mouth_tight_eval",
     "g3_contempt", "g3_nose_crinkle", "g3_lip_compression", "g3_eye_block", "g3_jaw_clench",
     "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover",
-    "g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition",
+    "g3_lip_corner_dip", "g3_brow_lower_sustained", "g3_eye_squeeze", "g3_head_shake",
+    "g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition", "g4_mouth_relax", "g4_smile_sustain",
 ]
 
-# Psychology-informed signifier weights: higher = stronger engagement/emotion correlate
-# G1: eye_contact, head_tilt, rhythmic_nodding up; duchenne, pupil_dilation down (weak/context-dependent)
-# G3: gaze_aversion, lip_compression up (robust resistance cues); contempt moderate
-# G4: smile_transition, fixed_gaze up (decision-ready)
+# Research-refined signifier weights (FACS, Mehrabian, Cialdini, Kahneman; Waller 2024, Edmondson).
+# 44 elements; new signifiers default 1.0.
 DEFAULT_SIGNIFIER_WEIGHTS: List[float] = [
-    0.85, 0.70, 1.00, 1.40, 1.20,  # g1: duchenne, pupil, eyebrow_flash, eye_contact, head_tilt
+    1.05, 0.55, 1.00, 1.55, 1.20,  # g1: duchenne+, pupil-, eyebrow_flash, eye_contact+, head_tilt
     1.25, 1.00, 1.35, 1.10, 1.00,  # g1: forward_lean, symmetry, nodding, parted_lips, softened_forehead
-    1.00, 1.00, 1.15, 1.30, 0.85,  # g2: look_up_lr, lip_pucker, eye_squint, thinking_brow, chin_stroke
-    1.10, 1.00,                     # g2: stillness, lowered_brow
-    1.20, 1.10, 1.35, 1.00, 1.25,  # g3: contempt, nose_crinkle, lip_compression, eye_block, jaw_clench
-    1.00, 1.45, 1.05, 0.85, 0.80,  # g3: rapid_blink, gaze_aversion, no_nod, narrowed_pupils, mouth_cover
-    1.25, 1.35, 1.40,               # g4: relaxed_exhale, fixed_gaze, smile_transition
+    1.05, 1.00, 1.00, 1.00, 1.10,  # g1: micro_smile, brow_raise_sustained, mouth_open_receptive, eye_widening, nod_intensity
+    1.00, 1.00, 1.15, 1.30, 0.50,  # g2: look_up_lr, lip_pucker, eye_squint, thinking_brow, chin_stroke-
+    1.10, 1.00, 1.15, 1.00, 1.05,  # g2: stillness, lowered_brow, brow_furrow_deep, gaze_shift_frequency, mouth_tight_eval
+    1.40, 1.10, 1.50, 1.00, 1.25,  # g3: contempt+, nose_crinkle, lip_compression+, eye_block, jaw_clench
+    1.00, 1.55, 1.05, 0.85, 0.50,  # g3: rapid_blink, gaze_aversion+, no_nod, narrowed_pupils, mouth_cover-
+    1.10, 1.10, 1.00, 1.00,        # g3: lip_corner_dip, brow_lower_sustained, eye_squeeze, head_shake
+    1.40, 1.50, 1.45, 1.15, 1.20,  # g4: relaxed_exhale+, fixed_gaze+, smile_transition, mouth_relax, smile_sustain
 ]
 
 # Group weights: G1 (interest), G2 (cognitive load), G3 (resistance), G4 (decision-ready)
@@ -83,8 +84,9 @@ def set_weights(
     signifier: 30 floats; group: 4 floats.
     """
     if signifier is not None:
-        if len(signifier) != 30:
-            raise ValueError("signifier must have 30 elements")
+        n = len(SIGNIFIER_KEYS_ORDER)
+        if len(signifier) != n:
+            raise ValueError(f"signifier must have {n} elements")
         _current["signifier"] = [float(x) for x in signifier]
     if group is not None:
         if len(group) != 4:
@@ -96,7 +98,8 @@ def set_weights(
 def _apply(data: dict) -> None:
     sig = data.get("signifier")
     grp = data.get("group")
-    if isinstance(sig, list) and len(sig) == 30:
+    n = len(SIGNIFIER_KEYS_ORDER)
+    if isinstance(sig, list) and len(sig) == n:
         _current["signifier"] = [float(x) for x in sig]
     if isinstance(grp, list) and len(grp) == 4:
         _current["group"] = [float(x) for x in grp]

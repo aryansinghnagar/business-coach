@@ -113,7 +113,7 @@ class VideoSourceHandler:
         Args:
             source_type: Type of video source (WEBCAM, FILE, STREAM)
             source_path: Path to video file or stream URL (required for FILE/STREAM)
-            lightweight: If True, use lower webcam resolution (640x360) for faster processing
+            lightweight: 720p, every-2nd-frame when FPS allows; both modes 720p
         """
         self.release()
         self.source_type = source_type
@@ -140,10 +140,10 @@ class VideoSourceHandler:
                     except Exception:
                         self.cap = cv2.VideoCapture(0)
                 if self.cap and self.cap.isOpened():
-                    w, h = (640, 360) if lightweight else (1280, 720)
+                    w, h = (1280, 720)
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    self.cap.set(cv2.CAP_PROP_FPS, 30 if lightweight else 60)
                     self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 
             elif source_type == VideoSourceType.FILE:
@@ -224,16 +224,14 @@ class VideoSourceHandler:
         Get properties of the current video source.
         
         Returns:
-            Dictionary containing video properties:
-            - width: Frame width in pixels
-            - height: Frame height in pixels
-            - fps: Frames per second
-            - frame_count: Total frames (for files) or -1 (for streams/webcam/partner)
+            Dictionary with keys width, height, fps, frame_count. When no source
+            is open, returns width=0, height=0, fps=0, frame_count=-1 so callers
+            need not guard for missing keys.
         """
         if self.source_type == VideoSourceType.PARTNER:
             return {'width': 0, 'height': 0, 'fps': 30, 'frame_count': -1}
         if not self.cap or not self.cap.isOpened():
-            return {}
+            return {'width': 0, 'height': 0, 'fps': 0, 'frame_count': -1}
         return {
             'width': int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
             'height': int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),

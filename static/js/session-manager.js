@@ -148,7 +148,8 @@ class SessionManager {
                     messages: messages,
                     enableOyd: options.enableOyd || false,
                     systemPrompt: options.systemPrompt || null,
-                    includeEngagement: options.includeEngagement !== false // Default to true
+                    includeEngagement: options.includeEngagement !== false, // Default to true
+                    additionalContext: options.additionalContext || null
                 })
             });
             
@@ -247,6 +248,17 @@ class SessionManager {
             if (this.shouldStopStreaming) {
                 // Stream was interrupted
                 return;
+            }
+            
+            // Record last response for sidebar/dashboard (backend store)
+            if (assistantReply && this.apiBaseUrl) {
+                try {
+                    fetch(`${this.apiBaseUrl}/api/engagement/record-response`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ response: assistantReply })
+                    }).catch(function () {});
+                } catch (e) {}
             }
             
             // Call completion callback

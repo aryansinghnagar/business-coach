@@ -26,9 +26,14 @@ def build_config_response() -> Dict[str, Any]:
             "region": config.SPEECH_REGION,
             "privateEndpointEnabled": config.SPEECH_PRIVATE_ENDPOINT_ENABLED
         },
-        "openai": {
-            "endpoint": config.AZURE_OPENAI_ENDPOINT,
-            "deploymentName": config.DEPLOYMENT_NAME,
+        "foundry": {
+            "endpoint": config.AZURE_FOUNDRY_ENDPOINT,
+            "deploymentName": config.FOUNDRY_DEPLOYMENT_NAME,
+            "apiVersion": "2023-06-01-preview"
+        },
+        "openai": {  # backward compatibility alias
+            "endpoint": config.AZURE_FOUNDRY_ENDPOINT,
+            "deploymentName": config.FOUNDRY_DEPLOYMENT_NAME,
             "apiVersion": "2023-06-01-preview"
         },
         "cognitiveSearch": {
@@ -57,11 +62,15 @@ def build_config_response() -> Dict[str, Any]:
         "faceDetection": {
             **config.get_face_detection_config(),
             "method": get_face_detection_method(),
-            "lightweightMode": getattr(config, "LIGHTWEIGHT_MODE", False),
+            "lightweightMode": config.LIGHTWEIGHT_MODE,
         },
         "signifierWeights": {
-            "url": getattr(config, "SIGNIFIER_WEIGHTS_URL", None),
-            "path": getattr(config, "SIGNIFIER_WEIGHTS_PATH", "weights/signifier_weights.json"),
+            "url": config.SIGNIFIER_WEIGHTS_URL,
+            "path": config.SIGNIFIER_WEIGHTS_PATH,
         },
-        "azureFaceApi": config.get_azure_face_api_config()
+        "azureFaceApi": config.get_azure_face_api_config(),
+        "acoustic": {
+            "acousticAnalysisEnabled": config.ACOUSTIC_ANALYSIS_ENABLED,
+            "acousticContextMaxAgeSec": config.ACOUSTIC_CONTEXT_MAX_AGE_SEC,
+        },
     }

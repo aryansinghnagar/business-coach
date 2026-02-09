@@ -39,7 +39,7 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
         self.mp_face_mesh = mp.solutions.face_mesh
         self.mp_face_detection = mp.solutions.face_detection
         
-        # Primary: tracking mode for continuous video (fast)
+        # Primary: tracking mode for continuous video (fast) — always created
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
@@ -48,20 +48,9 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
             min_tracking_confidence=self._track_conf
         )
         
-        # Fallback: static mode for when tracking fails (more reliable initial detection)
-        self.face_mesh_static = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.05,  # Very low for fallback
-            min_tracking_confidence=0.05
-        )
-        
-        # Last resort: simple face detection (just bounding box, no landmarks)
-        self.face_detection = self.mp_face_detection.FaceDetection(
-            model_selection=1,  # 1 = full range model (better for various distances)
-            min_detection_confidence=0.3
-        )
+        # Fallback models: created on first use to reduce memory and startup cost
+        self._face_mesh_static = None
+        self._face_detection = None
         
         self._consecutive_tracking_failures = 0
         self._available = True
@@ -94,18 +83,17 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
             self._consecutive_tracking_failures = 0
             return self._extract_landmarks(results, width, height)
         
-        # Strategy 2: Static mode fallback (more reliable for new/lost faces)
+        # Strategy 2: Static mode fallback (more reliable for new/lost faces) — lazy init
         self._consecutive_tracking_failures += 1
-        results_static = self.face_mesh_static.process(rgb_image)
+        results_static = self._get_face_mesh_static().process(rgb_image)
         if results_static.multi_face_landmarks:
             # Reset tracking failures since we found a face
             self._consecutive_tracking_failures = 0
             return self._extract_landmarks(results_static, width, height)
         
-        # Strategy 3: Simple face detection (just to verify face exists)
-        # This helps diagnose if FaceMesh is the problem vs no face in frame
+        # Strategy 3: Simple face detection (just to verify face exists) — lazy init
         if self._consecutive_tracking_failures >= 5:
-            simple_results = self.face_detection.process(rgb_image)
+            simple_results = self._get_face_detection().process(rgb_image)
             if simple_results.detections:
                 # Face exists but FaceMesh can't get landmarks
                 # Try resetting the tracking-mode mesh
@@ -113,6 +101,27 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
                 self._consecutive_tracking_failures = 0
         
         return []
+    
+    def _get_face_mesh_static(self):
+        """Lazy init: create static FaceMesh only when tracking fails."""
+        if self._face_mesh_static is None:
+            self._face_mesh_static = self.mp_face_mesh.FaceMesh(
+                static_image_mode=True,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.05,
+                min_tracking_confidence=0.05
+            )
+        return self._face_mesh_static
+    
+    def _get_face_detection(self):
+        """Lazy init: create simple FaceDetection only when needed (5+ tracking failures)."""
+        if self._face_detection is None:
+            self._face_detection = self.mp_face_detection.FaceDetection(
+                model_selection=1,
+                min_detection_confidence=0.3
+            )
+        return self._face_detection
     
     def _extract_landmarks(self, results, width: int, height: int) -> List[FaceDetectionResult]:
         """Extract landmarks from MediaPipe FaceMesh results."""
@@ -177,13 +186,13 @@ class MediaPipeFaceDetector(FaceDetectorInterface):
                 self.face_mesh.close()
             except Exception:
                 pass
-        if hasattr(self, 'face_mesh_static'):
+        if self._face_mesh_static is not None:
             try:
-                self.face_mesh_static.close()
+                self._face_mesh_static.close()
             except Exception:
                 pass
-        if hasattr(self, 'face_detection'):
+        if self._face_detection is not None:
             try:
-                self.face_detection.close()
+                self._face_detection.close()
             except Exception:
                 pass

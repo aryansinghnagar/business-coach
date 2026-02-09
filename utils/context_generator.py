@@ -8,7 +8,7 @@ appropriate actions during business meetings.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 from utils.engagement_scorer import EngagementMetrics
 
 # Import EngagementLevel - using lazy import to avoid circular dependency
@@ -52,11 +52,34 @@ class ContextGenerator:
         context = generator.generate_context(score, metrics, level)
     """
     
+    def generate_context_no_face(self) -> EngagementContext:
+        """Generate context when no face is detected. AI still gets a minimal, actionable block."""
+        summary = "No face detected. Assume neutral engagement; consider requesting video or checking in."
+        level_description = "No video signal available. Cannot assess engagement from facial cues. Consider asking the partner to enable video or to confirm they are still present."
+        key_indicators = ["No facial metrics available - video may be off or face not in frame"]
+        suggested_actions = [
+            "Ask an open-ended question to gauge engagement",
+            "Consider requesting video if the meeting is important",
+            "Continue with verbal check-ins (e.g. 'Does that make sense?')",
+        ]
+        risk_factors = ["No visual engagement data - may miss non-verbal cues"]
+        opportunities = ["No positive or negative signals available from face; use verbal cues and tone"]
+        return EngagementContext(
+            summary=summary,
+            level_description=level_description,
+            key_indicators=key_indicators,
+            suggested_actions=suggested_actions,
+            risk_factors=risk_factors,
+            opportunities=opportunities,
+        )
+
     def generate_context(
         self,
         score: float,
         metrics: EngagementMetrics,
-        level  # EngagementLevel enum (imported lazily to avoid circular dependency)
+        level,  # EngagementLevel enum (imported lazily to avoid circular dependency)
+        composite_metrics: Optional[Dict[str, float]] = None,
+        acoustic_tags: Optional[List[str]] = None,
     ) -> EngagementContext:
         """
         Generate contextual information from engagement data.
@@ -65,6 +88,8 @@ class ContextGenerator:
             score: Overall engagement score (0-100)
             metrics: Detailed engagement metrics
             level: Engagement level category
+            composite_metrics: Optional composite metrics (confusion, tension, disengagement, etc.)
+            acoustic_tags: Optional acoustic tags (e.g. acoustic_uncertainty, acoustic_tension)
         
         Returns:
             EngagementContext object with generated information
@@ -73,8 +98,12 @@ class ContextGenerator:
         level_description = self._describe_level(level)
         key_indicators = self._identify_key_indicators(metrics, level)
         suggested_actions = self._suggest_actions(score, metrics, level)
-        risk_factors = self._identify_risks(score, metrics, level)
+        risk_factors = self._identify_risks(score, metrics, level, composite_metrics, acoustic_tags)
         opportunities = self._identify_opportunities(score, metrics, level)
+        # Absence of negative: when no risks and not low engagement, add opportunity line
+        EngagementLevel = _get_engagement_level()
+        if not risk_factors and level not in [EngagementLevel.VERY_LOW, EngagementLevel.LOW]:
+            opportunities.append("No confusion or resistance detected; room to deepen engagement or seek commitment.")
         
         return EngagementContext(
             summary=summary,
@@ -156,7 +185,9 @@ class ContextGenerator:
         elif metrics.mouth_activity > 70:
             indicators.append("Active mouth movement - speaking or showing interest")
         
-        return indicators if indicators else ["Standard engagement indicators observed"]
+        if not indicators:
+            return ["Mixed or neutral indicators; no strong positive or negative signals observed."]
+        return indicators
     
     def _suggest_actions(
         self,
@@ -219,16 +250,21 @@ class ContextGenerator:
         if metrics.facial_expressiveness > 70 and level in [EngagementLevel.HIGH, EngagementLevel.VERY_HIGH]:
             actions.append("They're showing strong interest - this is an ideal time to ask for referrals, testimonials, or introductions")
         
+        if not actions:
+            actions.append("Continue monitoring engagement levels")
+            actions.append("Ask an open-ended question to gauge engagement")
         return actions
     
     def _identify_risks(
         self,
         score: float,
         metrics: EngagementMetrics,
-        level
+        level,
+        composite_metrics: Optional[Dict[str, float]] = None,
+        acoustic_tags: Optional[List[str]] = None,
     ) -> List[str]:
         EngagementLevel = _get_engagement_level()
-        """Identify potential risks or concerns."""
+        """Identify potential risks or concerns; use composite and acoustic when available."""
         risks = []
         
         if level in [EngagementLevel.VERY_LOW, EngagementLevel.LOW]:
@@ -248,6 +284,25 @@ class ContextGenerator:
         
         if level == EngagementLevel.MEDIUM and score < 50:
             risks.append("Engagement is declining - may drop to low if not addressed")
+        
+        comp = composite_metrics or {}
+        ac = set(acoustic_tags or [])
+        if comp.get("cognitive_load_multimodal", 0) >= 55 or comp.get("confusion_multimodal", 0) >= 50:
+            risks.append("Elevated cognitive load or confusion (furrowed brow, gaze aversion, uncertain content)")
+        if comp.get("skepticism_objection_strength", 0) >= 50 or comp.get("tension_objection_multimodal", 0) >= 50:
+            risks.append("Resistance or objection cues (lip compression, averted gaze, tense expression)")
+        if comp.get("disengagement_risk_multimodal", 0) >= 55 or comp.get("loss_of_interest_multimodal", 0) >= 50:
+            risks.append("Disengagement or loss of interest (flat affect, gaze drifting, low commitment language)")
+        if "acoustic_uncertainty" in ac:
+            risks.append("Vocal uncertainty or questioning tone—consider clarifying")
+        if "acoustic_tension" in ac:
+            risks.append("Vocal tension may signal objection or stress—acknowledge and address")
+        if "acoustic_disengagement_risk" in ac:
+            risks.append("Low vocal energy and flat pitch suggest possible withdrawal—re-engage")
+        # Absence of positive engagement as soft risk when no strong positive signals
+        if level not in [EngagementLevel.HIGH, EngagementLevel.VERY_HIGH]:
+            if (metrics.eye_contact <= 75 and metrics.facial_expressiveness <= 70):
+                risks.append("Limited positive engagement signals; consider inviting participation or checking in")
         
         return risks
     
@@ -279,7 +334,9 @@ class ContextGenerator:
         if level == EngagementLevel.MEDIUM and score > 55:
             opportunities.append("Engagement is building - continue with current approach")
         
-        return opportunities if opportunities else ["Continue monitoring engagement levels"]
+        if not opportunities:
+            return ["Continue monitoring engagement levels"]
+        return opportunities
     
     def format_for_ai(self, context: EngagementContext) -> str:
         """
@@ -332,3 +389,67 @@ class ContextGenerator:
         ])
         
         return "\n".join(lines)
+
+    def build_context_bundle_for_foundry(
+        self,
+        context: EngagementContext,
+        acoustic_summary: str = "",
+        acoustic_tags: Optional[List[str]] = None,
+        additional_context: Optional[str] = None,
+        persistently_low_line: Optional[str] = None,
+    ) -> str:
+        """
+        Build the full context string in ordered sections for Azure AI Foundry.
+        Groups related chunks: meeting context (summary, level, indicators, actions),
+        negative signals, persistently low, positive/opportunities, voice, user context.
+        """
+        sections = []
+        # [MEETING CONTEXT] — summary, level, key indicators, suggested actions only
+        meeting_lines = [
+            "=== REAL-TIME MEETING PARTNER ENGAGEMENT ANALYSIS ===",
+            "",
+            f"ENGAGEMENT STATE: {context.summary}",
+            f"DETAILED ASSESSMENT: {context.level_description}",
+            "",
+            "KEY BEHAVIORAL INDICATORS:",
+            *[f"  • {indicator}" for indicator in context.key_indicators],
+            "",
+            "RECOMMENDED ACTIONS:",
+            *[f"  → {action}" for action in context.suggested_actions],
+            "",
+            "=== END ENGAGEMENT ANALYSIS ===",
+        ]
+        sections.append(f"[MEETING CONTEXT]\n" + "\n".join(meeting_lines) + "\n[/MEETING CONTEXT]")
+        # [NEGATIVE SIGNALS]
+        if context.risk_factors:
+            neg_lines = ["[NEGATIVE SIGNALS]", "Risks and concerns to address:"]
+            for r in context.risk_factors:
+                neg_lines.append(f"  - {r}")
+            if acoustic_tags:
+                neg_lines.append(f"Voice tags: {', '.join(acoustic_tags)}")
+            neg_lines.append("Suggest how to relieve root causes (clarify, validate and address, re-engage).")
+            neg_lines.append("[/NEGATIVE SIGNALS]")
+            sections.append("\n".join(neg_lines))
+        # [PERSISTENTLY LOW / ABSENCE OF POSITIVE]
+        if persistently_low_line:
+            sections.append(f"[PERSISTENTLY LOW / ABSENCE OF POSITIVE]\n{persistently_low_line}\n[/PERSISTENTLY LOW / ABSENCE OF POSITIVE]")
+        # [POSITIVE / OPPORTUNITIES]
+        if context.opportunities:
+            opp_lines = ["[POSITIVE / OPPORTUNITIES]"] + [f"  - {o}" for o in context.opportunities] + ["[/POSITIVE / OPPORTUNITIES]"]
+            sections.append("\n".join(opp_lines))
+        # [VOICE ANALYSIS]
+        if acoustic_summary or (acoustic_tags and len(acoustic_tags) > 0):
+            voice_parts = ["[VOICE ANALYSIS]"]
+            if acoustic_summary:
+                voice_parts.append(acoustic_summary)
+            if acoustic_tags:
+                voice_parts.append(f"Tags: {', '.join(acoustic_tags)}")
+            voice_parts.append("[/VOICE ANALYSIS]")
+            sections.append("\n".join(voice_parts))
+        # [ADDITIONAL CONTEXT FROM USER]
+        if additional_context and additional_context.strip():
+            sections.append(f"[ADDITIONAL CONTEXT FROM USER]\n{additional_context.strip()}\n[/ADDITIONAL CONTEXT FROM USER]")
+        return "\n\n".join(sections)
+
+    # Backward compatibility alias
+    build_context_bundle_for_openai = build_context_bundle_for_foundry

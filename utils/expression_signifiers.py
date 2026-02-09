@@ -1,20 +1,26 @@
 """
 Expression Signifiers Module
 
-Implements 30 B2B-relevant facial expression signifiers from MediaPipe/Azure Face API
+Implements 44 B2B-relevant facial expression signifiers from MediaPipe/Azure Face API
 landmarks. Each signifier is scored 0-100. Psychology-informed weights and formulas
 (see docs/DOCUMENTATION.md §7).
+
+Research: Ekman & Friesen (FACS, Duchenne), Mehrabian (eye contact 70–80% ideal),
+Davidenko et al. (head tilt 11° band), Glenberg/Doherty-Sneddon (gaze aversion duration),
+Edmondson (psychological safety), Waller 2024 (expressiveness).
 
 We keep a short history of recent frames (a "buffer") so we can detect patterns over
 time—e.g. nodding, blinks, or sustained stillness. Weights control how much each
 signifier contributes to the final engagement score (configurable per signifier and per group).
 
 Groups:
-  1. Interest & Engagement (10): eye contact (strong), head tilt, nodding, Duchenne
-     (mouth-primary, squinch secondary), forward lean, parted lips, symmetry, etc.
-  2. Cognitive Load (7): look away, thinking brow, eye squint, lip pucker, stillness.
-  3. Resistance (9): gaze aversion (strong), lip compression, contempt, jaw clench, etc.
-  4. Decision-Ready (3): smile transition, fixed gaze, relaxed exhale.
+  1. Interest & Engagement (15): Duchenne, eye contact, head tilt, nodding, parted lips,
+     micro_smile, brow_raise_sustained, mouth_open_receptive, eye_widening, nod_intensity, etc.
+  2. Cognitive Load (10): look away, thinking brow, eye squint, stillness, brow_furrow_deep,
+     gaze_shift_frequency, mouth_tight_eval, etc.
+  3. Resistance (14): contempt (Ekman unilateral asymmetry), gaze aversion, lip compression,
+     lip_corner_dip, brow_lower_sustained, eye_squeeze, head_shake, etc.
+  4. Decision-Ready (5): smile transition, fixed gaze, relaxed exhale, mouth_relax, smile_sustain.
 """
 
 import time
@@ -38,15 +44,20 @@ FACE_LEFT, FACE_RIGHT = 234, 454
 # Inner brows for furrow
 INNER_BROW_L, INNER_BROW_R = 70, 300  # fallback to first/last of eyebrow if OOB
 
-# All 30 signifier keys (single shared list; no per-call allocation).
+# All 44 signifier keys (single shared list; no per-call allocation).
+# Original 30 + 14 research-based additions (Waller 2024, Ekman FACS, Edmondson, B2B negotiation).
 SIGNIFIER_KEYS: List[str] = [
     "g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
     "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead",
+    "g1_micro_smile", "g1_brow_raise_sustained", "g1_mouth_open_receptive", "g1_eye_widening", "g1_nod_intensity",
     "g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
     "g2_stillness", "g2_lowered_brow",
+    "g2_brow_furrow_deep", "g2_gaze_shift_frequency", "g2_mouth_tight_eval",
     "g3_contempt", "g3_nose_crinkle", "g3_lip_compression", "g3_eye_block", "g3_jaw_clench",
     "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover",
+    "g3_lip_corner_dip", "g3_brow_lower_sustained", "g3_eye_squeeze", "g3_head_shake",
     "g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition",
+    "g4_mouth_relax", "g4_smile_sustain",
 ]
 
 
@@ -93,12 +104,9 @@ def _normalize_lm(landmarks: np.ndarray, w: int, h: int) -> np.ndarray:
 
 
 class ExpressionSignifierEngine:
-    """
-    Computes 30 expression signifier scores and a composite engagement score (0-100)
-    from landmarks and optional FaceDetectionResult. Uses a temporal buffer (recent
-    frames) for time-based signifiers like blinks, nodding, and stillness; weights
-    determine how much each signifier affects the final score.
-    """
+    """30 signifier scores (0-100) from landmarks; temporal buffer for blinks, nodding, stillness."""
+
+    _FPS_REF = 30.0  # Reference FPS for scaling time-based frame thresholds (30–60 fps)
 
     def __init__(
         self,
@@ -108,6 +116,7 @@ class ExpressionSignifierEngine:
         self.buffer_frames = max(10, buffer_frames)
         self._buf: deque = deque(maxlen=self.buffer_frames)
         self._weights_provider = weights_provider
+        self._fps: float = self._FPS_REF
         self._landmarks: Optional[np.ndarray] = None
         self._face_result: Optional[FaceDetectionResult] = None
         self._shape: Optional[Tuple[int, int, int]] = None
@@ -125,10 +134,12 @@ class ExpressionSignifierEngine:
         self._smooth_alpha: float = 0.75
         # Contempt: baseline asymmetry (person-specific); history for temporal consistency
         self._contempt_asymmetry_history: deque = deque(maxlen=24)
-        # Hysteresis for binary 0/100: avoid flip when raw hovers near cutoff (up 58, down 48)
-        self._binary_state: Dict[str, float] = {}
         # Previous-frame landmarks for temporal movement (relaxed exhale: stillness after release)
         self._prev_landmarks: Optional[np.ndarray] = None
+
+    def set_fps(self, fps: float) -> None:
+        """Set current processing FPS so time-based frame thresholds scale (30–60 fps)."""
+        self._fps = max(15.0, min(120.0, float(fps)))
 
     def reset(self) -> None:
         """Clear temporal buffer and baselines (e.g. on detection start)."""
@@ -142,7 +153,6 @@ class ExpressionSignifierEngine:
         self._blink_start_frames = 0
         self._blinks_in_window = 0
         self._contempt_asymmetry_history.clear()
-        self._binary_state.clear()
         self._prev_landmarks = None
 
     def update(
@@ -318,7 +328,9 @@ class ExpressionSignifierEngine:
         if is_blink > 0.5:
             self._blink_start_frames += 1
         else:
-            if self._blink_start_frames >= 2 and self._blink_start_frames <= 8:
+            min_b = max(1, int(2 * self._fps / self._FPS_REF))
+            max_b = max(min_b, int(8 * self._fps / self._FPS_REF))
+            if self._blink_start_frames >= min_b and self._blink_start_frames <= max_b:
                 self._blinks_in_window += 1
             self._blink_start_frames = 0
 
@@ -363,6 +375,11 @@ class ExpressionSignifierEngine:
         out["g1_rhythmic_nodding"] = self._g1_rhythmic_nodding(buf)
         out["g1_parted_lips"] = self._g1_parted_lips(cur, buf)
         out["g1_softened_forehead"] = self._g1_softened_forehead(lm, cur, buf)
+        out["g1_micro_smile"] = self._g1_micro_smile(lm, cur, buf)
+        out["g1_brow_raise_sustained"] = self._g1_brow_raise_sustained(buf)
+        out["g1_mouth_open_receptive"] = self._g1_mouth_open_receptive(cur, buf)
+        out["g1_eye_widening"] = self._g1_eye_widening(cur, buf)
+        out["g1_nod_intensity"] = self._g1_nod_intensity(buf)
 
         # --- Group 2: Cognitive Load ---
         out["g2_look_up_lr"] = self._g2_look_up_lr(cur, buf)
@@ -372,6 +389,9 @@ class ExpressionSignifierEngine:
         out["g2_chin_stroke"] = 0.0  # no hand detection
         out["g2_stillness"] = self._g2_stillness(buf)
         out["g2_lowered_brow"] = self._g2_lowered_brow(lm, buf)
+        out["g2_brow_furrow_deep"] = self._g2_brow_furrow_deep(lm, buf)
+        out["g2_gaze_shift_frequency"] = self._g2_gaze_shift_frequency(buf)
+        out["g2_mouth_tight_eval"] = self._g2_mouth_tight_eval(cur, buf)
 
         # --- Group 3: Resistance (store as-is; composite uses 100 - x) ---
         out["g3_contempt"] = self._g3_contempt(lm, ml, mr, fr, cur, buf)
@@ -384,38 +404,35 @@ class ExpressionSignifierEngine:
         out["g3_no_nod"] = self._g3_no_nod(buf)
         out["g3_narrowed_pupils"] = self._g3_narrowed_pupils(cur, buf)  # proxy: squint
         out["g3_mouth_cover"] = 0.0  # no hand detection
+        out["g3_lip_corner_dip"] = self._g3_lip_corner_dip(lm, cur, buf)
+        out["g3_brow_lower_sustained"] = self._g3_brow_lower_sustained(buf)
+        out["g3_eye_squeeze"] = self._g3_eye_squeeze(cur, buf)
+        out["g3_head_shake"] = self._g3_head_shake(buf)
 
         # --- Group 4: Decision-Ready ---
         out["g4_relaxed_exhale"] = self._g4_relaxed_exhale(buf)
         out["g4_fixed_gaze"] = self._g4_fixed_gaze(buf, w, h)
         out["g4_smile_transition"] = self._g4_smile_transition(buf, out.get("g1_duchenne", 0))
+        out["g4_mouth_relax"] = self._g4_mouth_relax(buf)
+        out["g4_smile_sustain"] = self._g4_smile_sustain(buf, out.get("g1_duchenne", 0))
 
-        # Binary output: 0 or 100 only; hysteresis to reduce flip when raw hovers near cutoff
-        _UP, _DOWN = 58.0, 48.0  # raw: >= UP -> 100, <= DOWN -> 0, else keep previous (default 0)
+        # Continuous 0-100: clamp raw scores; no binary/hysteresis
         for k in out:
             v = float(out[k])
             if not np.isfinite(v):
                 out[k] = 0.0
-                self._binary_state[k] = 0.0
-                continue
-            prev = self._binary_state.get(k, 0.0)
-            if v >= _UP:
-                out[k] = 100.0
-                self._binary_state[k] = 100.0
-            elif v <= _DOWN:
-                out[k] = 0.0
-                self._binary_state[k] = 0.0
             else:
-                out[k] = prev
+                out[k] = float(np.clip(v, 0.0, 100.0))
         return out
 
     def _all_keys(self) -> List[str]:
-        """Return the list of all 30 signifier keys (cached at module level)."""
+        """Return the list of all signifier keys (cached at module level)."""
         return SIGNIFIER_KEYS
 
     def _get_weights(self) -> Dict[str, List[float]]:
         """Fetch weights once per frame; reuse via get_group_means(..., W) / get_composite_score(..., W)."""
-        return self._weights_provider() if self._weights_provider else {"signifier": [1.0] * 30, "group": [0.35, 0.15, 0.35, 0.15]}
+        n = len(SIGNIFIER_KEYS)
+        return self._weights_provider() if self._weights_provider else {"signifier": [1.0] * n, "group": [0.35, 0.15, 0.35, 0.15]}
 
     def get_group_means(self, scores: Optional[Dict[str, float]] = None, W: Optional[Dict[str, List[float]]] = None) -> Dict[str, float]:
         """Return group means only (g1..g4). g3 is inverted (high = low resistance). No composite. Fast path for spike detection."""
@@ -424,9 +441,10 @@ class ExpressionSignifierEngine:
         keys = self._all_keys()
         if W is None:
             W = self._get_weights()
-        sw = W.get("signifier", [1.0] * 30)
-        if len(sw) != 30:
-            sw = [1.0] * 30
+        n_keys = len(keys)
+        sw = W.get("signifier", [1.0] * n_keys)
+        if len(sw) != n_keys:
+            sw = [1.0] * n_keys
 
         def wmean(grp_keys: List[str]) -> float:
             total_w, total_ws = 0.0, 0.0
@@ -443,12 +461,14 @@ class ExpressionSignifierEngine:
             return float(np.mean(vals)) if vals else 0.0
 
         g1k = ["g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
-               "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead"]
+               "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead",
+               "g1_micro_smile", "g1_brow_raise_sustained", "g1_mouth_open_receptive", "g1_eye_widening", "g1_nod_intensity"]
         g2k = ["g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
-               "g2_stillness", "g2_lowered_brow"]
+               "g2_stillness", "g2_lowered_brow", "g2_brow_furrow_deep", "g2_gaze_shift_frequency", "g2_mouth_tight_eval"]
         g3k = ["g3_contempt", "g3_nose_crinkle", "g3_lip_compression", "g3_eye_block", "g3_jaw_clench",
-               "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover"]
-        g4k = ["g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition"]
+               "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover",
+               "g3_lip_corner_dip", "g3_brow_lower_sustained", "g3_eye_squeeze", "g3_head_shake"]
+        g4k = ["g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition", "g4_mouth_relax", "g4_smile_sustain"]
 
         g1 = wmean(g1k)
         g2 = wmean(g2k)
@@ -524,12 +544,14 @@ class ExpressionSignifierEngine:
             return float(np.mean([scores[k] for k in grp_keys if k in scores])) if grp_keys else 0.0
 
         g1k = ["g1_duchenne", "g1_pupil_dilation", "g1_eyebrow_flash", "g1_eye_contact", "g1_head_tilt",
-               "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead"]
+               "g1_forward_lean", "g1_facial_symmetry", "g1_rhythmic_nodding", "g1_parted_lips", "g1_softened_forehead",
+               "g1_micro_smile", "g1_brow_raise_sustained", "g1_mouth_open_receptive", "g1_eye_widening", "g1_nod_intensity"]
         g2k = ["g2_look_up_lr", "g2_lip_pucker", "g2_eye_squint", "g2_thinking_brow", "g2_chin_stroke",
-               "g2_stillness", "g2_lowered_brow"]
+               "g2_stillness", "g2_lowered_brow", "g2_brow_furrow_deep", "g2_gaze_shift_frequency", "g2_mouth_tight_eval"]
         g3k = ["g3_contempt", "g3_nose_crinkle", "g3_lip_compression", "g3_eye_block", "g3_jaw_clench",
-               "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover"]
-        g4k = ["g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition"]
+               "g3_rapid_blink", "g3_gaze_aversion", "g3_no_nod", "g3_narrowed_pupils", "g3_mouth_cover",
+               "g3_lip_corner_dip", "g3_brow_lower_sustained", "g3_eye_squeeze", "g3_head_shake"]
+        g4k = ["g4_relaxed_exhale", "g4_fixed_gaze", "g4_smile_transition", "g4_mouth_relax", "g4_smile_sustain"]
 
         g1 = weighted_mean(g1k)
         g2 = weighted_mean(g2k)
@@ -562,6 +584,7 @@ class ExpressionSignifierEngine:
     def _g1_duchenne(self, lm: np.ndarray, cur: dict, buf: list) -> float:
         """
         Duchenne smile detector based on FACS AU 6 (cheek raise/eye squinch) + AU 12 (lip corner pull).
+        Per Ekman & Friesen (1982), AU6+AU12 together indicate genuine (felt) positive affect vs. social smile.
         
         Output spans 0-100 after scaling:
         - Low (0-25): Neither corner lift nor squinch present
@@ -732,7 +755,9 @@ class ExpressionSignifierEngine:
             g_bonus = (1.0 - gn) * 15.0
             return min(100.0, head_s + g_bonus)
 
-        recent_frames = buf[-18:] if len(buf) >= 18 else buf
+        ref = self._FPS_REF
+        win_eye = max(9, int(18 * self._fps / ref))
+        recent_frames = buf[-win_eye:] if len(buf) >= win_eye else buf
         frame_scores = [_frame_eye_contact(f) for f in recent_frames]
 
         # Count consecutive frames with good eye contact from current backward (lower threshold = more sustained)
@@ -746,14 +771,18 @@ class ExpressionSignifierEngine:
 
         avg_recent = float(np.mean(frame_scores)) if frame_scores else base_score
 
-        if sustained_period >= 14:
+        t_14 = max(7, int(14 * self._fps / ref))
+        t_10 = max(5, int(10 * self._fps / ref))
+        t_6 = max(3, int(6 * self._fps / ref))
+        t_3 = max(2, int(3 * self._fps / ref))
+        if sustained_period >= t_14:
             sustained_bonus = 28.0
-        elif sustained_period >= 10:
-            sustained_bonus = 18.0 + (sustained_period - 10) * 2.5
-        elif sustained_period >= 6:
-            sustained_bonus = 8.0 + (sustained_period - 6) * 2.5
-        elif sustained_period >= 3:
-            sustained_bonus = 2.0 + (sustained_period - 3) * 2.0
+        elif sustained_period >= t_10:
+            sustained_bonus = 18.0 + (sustained_period - t_10) * 2.5
+        elif sustained_period >= t_6:
+            sustained_bonus = 8.0 + (sustained_period - t_6) * 2.5
+        elif sustained_period >= t_3:
+            sustained_bonus = 2.0 + (sustained_period - t_3) * 2.0
         else:
             sustained_bonus = 0.0
 
@@ -951,6 +980,69 @@ class ExpressionSignifierEngine:
         
         return float(max(0.0, min(100.0, symmetry_score)))
 
+    def _g1_micro_smile(self, lm: np.ndarray, cur: dict, buf: list) -> float:
+        """Brief lip-corner raise; receptivity (Ekman micro-expressions). Lighter than Duchenne."""
+        mouth_pts = _safe(lm, MOUTH)
+        if len(mouth_pts) < 6:
+            return 50.0
+        face_scale = max(1e-6, cur.get("face_scale", 50.0))
+        ly, ry = float(mouth_pts[0, 1]), float(mouth_pts[5, 1]) if len(mouth_pts) > 5 else float(mouth_pts[0, 1])
+        upper_y = float(np.mean(mouth_pts[1:min(5, len(mouth_pts)), 1]))
+        corner_lift = upper_y - (ly + ry) / 2.0
+        lift_ratio = corner_lift / face_scale
+        if lift_ratio > 0.006:
+            return 50.0 + min(40.0, (lift_ratio - 0.006) * 800.0)
+        return 50.0
+
+    def _g1_brow_raise_sustained(self, buf: list) -> float:
+        """Sustained brow raise = interest/curiosity (FACS AU2)."""
+        if len(buf) < 8:
+            return 50.0
+        heights = [(b.get("eyebrow_l", 0) + b.get("eyebrow_r", 0)) / 2 for b in buf[-8:]]
+        face_scale = buf[-1].get("face_scale", 50.0)
+        baseline = float(np.median(heights[:4])) if len(heights) >= 4 else heights[0]
+        cur_avg = float(np.mean(heights[-4:])) if len(heights) >= 4 else heights[-1]
+        raise_amt = (cur_avg - baseline) / max(face_scale * 0.08, 1e-6)
+        if raise_amt > 0.3:
+            return 55.0 + min(35.0, raise_amt * 50.0)
+        return 50.0
+
+    def _g1_mouth_open_receptive(self, cur: dict, buf: list) -> float:
+        """Slight jaw drop = receptivity (Waller 2024 expressiveness)."""
+        mar = cur.get("mar", 0.2)
+        if len(buf) >= 3:
+            mar = float(np.median([b.get("mar", mar) for b in buf[-3:]]))
+        if 0.10 <= mar <= 0.28:
+            return 52.0 + (mar - 0.10) / 0.18 * 36.0
+        return 48.0
+
+    def _g1_eye_widening(self, cur: dict, buf: list) -> float:
+        """Wider eyes = interest/arousal (Hess)."""
+        if cur.get("is_blink", 0) > 0.5:
+            return 0.0
+        area = cur.get("eye_area", 0.0)
+        base = max(1e-6, self._baseline_eye_area)
+        if base <= 0:
+            return 50.0
+        r = area / base
+        if r >= 1.08:
+            return 55.0 + min(35.0, (r - 1.08) * 200.0)
+        if r >= 1.02:
+            return 50.0 + (r - 1.02) / 0.06 * 8.0
+        return 48.0
+
+    def _g1_nod_intensity(self, buf: list) -> float:
+        """Nod magnitude; agreement strength (Wells & Petty)."""
+        if len(buf) < 12:
+            return 40.0
+        pitches = [b["pitch"] for b in buf[-12:]]
+        pitch_std = float(np.std(pitches))
+        d = np.diff(pitches)
+        crosses = int(np.sum((d[:-1] * d[1:]) < 0))
+        if 1 <= crosses <= 5 and pitch_std > 0.5:
+            return 52.0 + min(30.0, pitch_std * 15.0 + crosses * 3.0)
+        return 42.0
+
     def _g1_rhythmic_nodding(self, buf: list) -> float:
         """
         Rhythmic nodding: vertical pitch oscillations. Research: Wells & Petty (1980)—
@@ -961,16 +1053,13 @@ class ExpressionSignifierEngine:
             return 40.0
         pitches = [b["pitch"] for b in buf[-12:]]
         pitch_std = float(np.std(pitches))
-        if pitch_std < 0.6:
-            return 34.0
-        # Simple: 1–2 “oscillations” in pitch
         d = np.diff(pitches)
-        crosses = np.sum((d[:-1] * d[1:]) < 0)
-        if 1 <= crosses <= 4:
-            return 68.0 + min(12.0, pitch_std * 4.0)
-        if pitch_std > 1.2:
-            return 48.0
-        return 42.0
+        crosses = int(np.sum((d[:-1] * d[1:]) < 0))
+        if pitch_std < 0.6:
+            return 34.0 + pitch_std * 13.0
+        nod_bonus = min(26.0, (crosses * 6.0) + (pitch_std - 0.6) * 20.0) if (1 <= crosses <= 4) else 0.0
+        base = 42.0 + (pitch_std - 0.6) / 0.6 * 8.0 if pitch_std < 1.2 else 50.0 - (pitch_std - 1.2) * 5.0
+        return float(max(34.0, min(100.0, base + nod_bonus)))
 
     def _g1_parted_lips(self, cur: dict, buf: list) -> float:
         """
@@ -1267,14 +1356,15 @@ class ExpressionSignifierEngine:
         m = float(np.median(vars_list))  # Median: robust to single-frame movement spikes
         m_normalized = m / avg_scale_sq
         
-        # Stricter: require VERY low variance for stillness (attentive listening is normal)
-        if m_normalized < 0.0008:  # Very strict (extremely still)
-            return 68.0
-        if m_normalized < 0.0025:  # Moderately still
+        # Continuous: very low variance = high score; ramp down smoothly with movement
+        if m_normalized < 0.0008:
+            return 68.0 + (0.0008 - m_normalized) / 0.0008 * 12.0
+        if m_normalized < 0.0025:
             return 55.0 + (0.0025 - m_normalized) / 0.0017 * 12.0
-        if m_normalized < 0.005:  # Slightly still
+        if m_normalized < 0.005:
             return 46.0 + (0.005 - m_normalized) / 0.0025 * 8.0
-        return 42.0  # Normal movement
+        # Normal movement: smooth ramp 42–46 as variance increases
+        return 42.0 + max(0.0, (0.012 - m_normalized)) / 0.007 * 4.0
 
     def _g2_lowered_brow(self, lm: np.ndarray, buf: list) -> float:
         """
@@ -1325,14 +1415,62 @@ class ExpressionSignifierEngine:
         # Compare to baseline: lower than typical = furrowed
         furrowed_amount = baseline_dist_rel - dist_rel
         
-        # Stricter thresholds
-        if dist_rel < 0.12 and furrowed_amount > 0.04:  # Very furrowed
+        # Continuous: furrowed amount and dist_rel drive score smoothly
+        if dist_rel < 0.12 and furrowed_amount > 0.04:
             return 75.0 + min(15.0, furrowed_amount * 200.0)
-        elif dist_rel < 0.16 and furrowed_amount > 0.02:  # Moderately furrowed
+        if dist_rel < 0.16 and furrowed_amount > 0.02:
             return 58.0 + (0.16 - dist_rel) / 0.04 * 14.0
-        elif dist_rel < 0.20:  # Slightly furrowed
+        if dist_rel < 0.20:
             return 48.0 + (0.20 - dist_rel) / 0.04 * 8.0
-        return 44.0
+        # Near neutral: smooth ramp so small changes in dist_rel still change score
+        return 44.0 + max(0.0, 0.22 - dist_rel) * 25.0
+
+    def _g2_brow_furrow_deep(self, lm: np.ndarray, buf: list) -> float:
+        """Strong AU4 = cognitive load or frustration."""
+        lb = _safe(lm, LEFT_EYEBROW)
+        rb = _safe(lm, RIGHT_EYEBROW)
+        le = _safe(lm, LEFT_EYE)
+        re = _safe(lm, RIGHT_EYE)
+        if len(lb) < 2 or len(le) < 2:
+            return 46.0
+        brow_y = (float(np.mean(lb[:, 1])) + float(np.mean(rb[:, 1]))) / 2
+        eye_y = (float(np.mean(le[:, 1])) + float(np.mean(re[:, 1]))) / 2
+        dist = eye_y - brow_y
+        face_scale = buf[-1].get("face_scale", 50.0) if buf else 50.0
+        face_scale = max(20.0, face_scale)
+        dist_rel = dist / face_scale
+        if dist_rel < 0.10:
+            return 70.0 + min(20.0, (0.12 - dist_rel) * 200.0)
+        if dist_rel < 0.14:
+            return 55.0 + (0.14 - dist_rel) / 0.04 * 12.0
+        return 46.0
+
+    def _g2_gaze_shift_frequency(self, buf: list) -> float:
+        """High shift rate = processing (Kahneman System 2)."""
+        if len(buf) < 10:
+            return 50.0
+        yaws = [b.get("yaw", 0) for b in buf[-10:]]
+        pitches = [b.get("pitch", 0) for b in buf[-10:]]
+        d_yaw = np.abs(np.diff(yaws))
+        d_pitch = np.abs(np.diff(pitches))
+        shift_rate = float(np.mean(d_yaw) + np.mean(d_pitch))
+        if shift_rate > 3.0:
+            return 55.0 + min(35.0, shift_rate * 4.0)
+        if shift_rate > 1.5:
+            return 50.0 + (shift_rate - 1.5) * 5.0
+        return 45.0
+
+    def _g2_mouth_tight_eval(self, cur: dict, buf: list) -> float:
+        """Tight mouth during evaluation."""
+        mar = cur.get("mar_inner", cur.get("mar", 0.2))
+        if len(buf) >= 3:
+            mar = float(np.median([b.get("mar_inner", b.get("mar", mar)) for b in buf[-3:]]))
+        baseline = max(0.08, self._baseline_mar) if self._baseline_mar > 0 else 0.18
+        if mar < baseline * 0.75 and mar < 0.06:
+            return 60.0 + min(25.0, (0.06 - mar) * 200.0)
+        if mar < baseline * 0.85:
+            return 50.0 + (0.85 - mar / baseline) * 30.0
+        return 42.0
 
     # ----- Group 3 -----
     def _g3_contempt(
@@ -1390,17 +1528,17 @@ class ExpressionSignifierEngine:
         above_baseline = corrected_ratio > baseline + 0.06  # 6% above typical
         abs_met = corrected_ratio > abs_threshold
 
-        # Temporal: at least 2 of last 3 frames must also meet criteria
+        # Temporal: at least 3 of last 4 frames must meet criteria (FP reduction: sustained only)
         recent_ok = 0
-        if len(buf) >= 3:
-            for b in buf[-3:]:
+        if len(buf) >= 4:
+            for b in buf[-4:]:
                 ar = b.get("mouth_corner_asymmetry_ratio", 0.0)
                 roll_b = abs(float(b.get("roll", 0)))
                 rc = min(0.10, roll_b * 0.004) if roll_b > 4.0 else 0.0
                 cr = max(0.0, ar - rc)
-                if cr > abs_threshold and cr > baseline + 0.05:
+                if cr > abs_threshold and cr > baseline + 0.06:
                     recent_ok += 1
-        temporal_met = recent_ok >= 2
+        temporal_met = recent_ok >= 3
 
         if not (abs_met and above_baseline and temporal_met):
             return 35.0
@@ -1415,22 +1553,26 @@ class ExpressionSignifierEngine:
         Nose crinkle: nose shortening. Research: FACS AU 9; wrinkling nose = disgust,
         skepticism. Levator labii activates; nose shortens. CAUTION: Can also indicate
         concentration or reaction to strong stimulus. Require SUSTAINED shortening
-        (>3 frames) and LARGE drop (>8%) to reduce false positives.
+        (3 of last 4 frames) and LARGE drop (median comparison) to reduce false positives.
         """
         nh = cur.get("nose_height", 0.0)
         if nh <= 0 or len(buf) < 6:
             return 8.0
-        recent = [b.get("nose_height", nh) for b in buf[-6:-1] if b.get("nose_height", 0) > 0]
+        # Use median of last 6 nose_height for comparison (robust to jitter)
+        recent = [b.get("nose_height", 0.0) for b in buf[-6:] if b.get("nose_height", 0) > 0]
         if not recent:
             return 8.0
-        avg = float(np.mean(recent))
-        if avg <= 1e-6:
+        med = float(np.median(recent))
+        if med <= 1e-6:
             return 8.0
-        # Require LARGER shortening (8%+) to reduce false positives
-        if nh < avg * 0.88:  # Stricter: 12% drop (was 0.92)
-            return 52.0 + min(36.0, (1.0 - nh / avg) * 90.0)
-        if nh < avg * 0.94:  # Moderate shortening (6%+)
-            return 28.0 + (0.94 - nh / avg) * 200.0
+        # Sustained shortening: current < median*0.88 in 3 of last 4 frames for score > 25
+        short_count = sum(1 for b in buf[-4:] if (b.get("nose_height", 0) or 0) < med * 0.88)
+        if nh < med * 0.88 and short_count >= 3:
+            return 52.0 + min(36.0, (1.0 - nh / med) * 90.0)
+        if nh < med * 0.88 and short_count >= 2:
+            return 28.0 + (0.88 - nh / med) * 200.0
+        if nh < med * 0.94:
+            return 6.0 + (0.94 - nh / med) * 80.0  # Low score unless sustained
         return 6.0  # Default low
 
     def _g3_lip_compression(self, cur: dict, buf: list) -> float:
@@ -1462,29 +1604,28 @@ class ExpressionSignifierEngine:
             mar = float(np.median(recent_mar))
         mar_ratio = mar / baseline_mar if baseline_mar > 0 else 1.0
 
-        # SUSTAINED: Require 5 of last 6 frames below baseline*0.78 (stricter)
-        sustained = False
-        if buf_len >= 6:
-            below_count = sum(
-                1 for b in buf[-6:]
-                if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.78)
-            )
-            sustained = below_count >= 5
+        # SUSTAINED: 5 of 6 for mid bands; 6/6 for high band (score > 50) to avoid speech-artifact FPs
+        below_count = sum(
+            1 for b in buf[-6:]
+            if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.78)
+        ) if buf_len >= 6 else 0
+        sustained = below_count >= 5
+        sustained_all_6 = below_count >= 6
 
-        # Only score above neutral when clearly below baseline (mar_ratio < 0.75)
+        # Require mar_ratio < 0.72 for any score > 12 (avoids speech-artifact FPs)
         if mar_ratio >= 0.75:
             return 4.0
         if not sustained:
-            if mar < 0.06 and mar_ratio < 0.85:
+            if mar < 0.06 and mar_ratio < 0.72:
                 return 8.0 + (0.75 - mar_ratio) * 20.0
             return 4.0
 
-        # Stricter absolute bands; require sustained + below baseline
-        if mar < 0.022 and mar_ratio < 0.68:
+        # High band (score > 50): 6/6 sustained below baseline*0.78 to avoid single-frame FPs
+        if mar < 0.022 and mar_ratio < 0.68 and sustained_all_6:
             return 68.0 + min(18.0, (0.68 - mar_ratio) * 50.0)
-        if mar < 0.032 and mar_ratio < 0.72:
+        if mar < 0.032 and mar_ratio < 0.72 and sustained_all_6:
             return 52.0 + (0.032 - mar) / 0.010 * 14.0
-        if mar < 0.045 and mar_ratio < 0.75:
+        if mar < 0.045 and mar_ratio < 0.72:
             return 38.0 + (0.045 - mar) / 0.013 * 10.0
         if mar < 0.058 and mar_ratio < 0.80:
             return 24.0 + (0.058 - mar) / 0.013 * 10.0
@@ -1497,7 +1638,7 @@ class ExpressionSignifierEngine:
         Eye block: prolonged closure. Research: shutting out, aversion. Extended
         eye closure (EAR < 0.1) = blocking visual input, disengagement, or distress.
         CAUTION: Normal blinks last 1-3 frames. Only score high when PROLONGED
-        (>12 frames = ~400ms at 30fps) to avoid false positives from blinks.
+        (~400ms at 30fps, scaled for 30–60 fps) to avoid false positives from blinks.
         """
         if len(buf) < 6:
             return 6.0
@@ -1507,13 +1648,19 @@ class ExpressionSignifierEngine:
                 run += 1
             else:
                 break
-        # Require LONGER closure to distinguish from blinks
-        if run >= 18:  # ~600ms = definite block
+        ref = self._FPS_REF
+        t_600 = max(9, int(18 * self._fps / ref))
+        t_400 = max(6, int(12 * self._fps / ref))
+        t_14 = max(7, int(14 * self._fps / ref))
+        t_8 = max(4, int(8 * self._fps / ref))
+        if run >= t_600:
             return 88.0
-        if run >= 12:  # ~400ms = likely block (was 6)
-            return 55.0 + (run - 12) / 6 * 28.0
-        if run >= 8:  # ~267ms = possible block
-            return 28.0 + (run - 8) * 4.0
+        if run >= t_400:
+            return 55.0 + (run - t_400) / max(1, (t_600 - t_400) / 2) * 28.0
+        if run >= t_14:
+            return 28.0 + (run - t_14) * 4.0
+        if run >= t_8:
+            return 12.0 + (run - t_8) * 2.0
         return 6.0  # Brief closure = likely blink
 
     def _g3_jaw_clench(self, lm: np.ndarray, cur: dict, fr: Optional[FaceDetectionResult], buf: list) -> float:
@@ -1554,18 +1701,20 @@ class ExpressionSignifierEngine:
             threshold = face_scale * 0.08  # 8% — neutral mouths rarely qualify
             corners_down = (ly + ry) / 2 > mid + threshold
 
-        # SUSTAINED: 5 of last 6 frames with MAR below baseline*0.72
-        sustained_low_mar = False
-        if buf_len >= 6:
-            below_count = sum(
-                1 for b in buf[-6:]
-                if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.72)
-            )
-            sustained_low_mar = below_count >= 5
+        # SUSTAINED: 5 of 6 for mid; 6/6 for highest band (68-82) for temporal consistency
+        below_count = sum(
+            1 for b in buf[-6:]
+            if (b.get("mar_inner", b.get("mar", 0.2)) < baseline_mar * 0.72)
+        ) if buf_len >= 6 else 0
+        sustained_low_mar = below_count >= 5
+        sustained_all_6 = below_count >= 6
 
-        # High score ONLY when BOTH corners down AND sustained low MAR AND below baseline
-        if mar < 0.038 and corners_down and mar_ratio < 0.72 and sustained_low_mar:
+        # Highest band (68-82): require 6/6 sustained_low_mar
+        if mar < 0.038 and corners_down and mar_ratio < 0.72 and sustained_all_6:
             return min(82.0, 68.0 + (0.038 - mar) * 200.0)
+        # Mid-high: 5 of 6 sustained
+        if mar < 0.038 and corners_down and mar_ratio < 0.72 and sustained_low_mar:
+            return min(67.0, 52.0 + (0.038 - mar) * 200.0)
         if mar < 0.048 and corners_down and mar_ratio < 0.78 and sustained_low_mar:
             return 52.0 + (0.048 - mar) / 0.010 * 18.0
         if mar < 0.058 and corners_down and mar_ratio < 0.82:
@@ -1589,19 +1738,20 @@ class ExpressionSignifierEngine:
         also indicate concentration or dry eyes. Use in combination with other G3 signals.
         """
         b = self._blinks_in_window
-        # Require higher count to reduce false positives
-        if b >= 6:  # Raised from 5
-            return 82.0
-        if b >= 4:  # Raised from 3
-            return 48.0 + (b - 4) * 15.0
-        return 6.0  # Normal blink rate
+        # Score > 25 only when b >= 5 (avoid normal variation 4 in 2s as resistance); 6+ for 82+
+        if b >= 6:
+            return 82.0 + min(18.0, (b - 6) * 6.0)
+        if b >= 5:
+            return 48.0 + (b - 5) * 30.0  # 48-78 for b=5
+        return 6.0 + min(b * 4.0, 18.0)  # 6, 10, 14, 18 for b=0,1,2,3; b=4 -> 18
 
     def _g3_gaze_aversion(self, cur: dict, buf: list) -> float:
         """
         Gaze aversion: looking away. Research: CRITICAL CONTEXT DEPENDENCY—gaze aversion
         serves DUAL functions: (1) internal cognitive processing/memory retrieval (positive),
-        (2) disengagement/discomfort (negative). Research shows gaze-away occurs within 1s
-        during memory retrieval, lasting ~6s, and is HIGHER for effortful retrieval.
+        (2) disengagement/discomfort (negative). Gaze aversion duration: Glenberg et al. (1998),
+        Doherty-Sneddon & Phelps (2005) on memory retrieval; sustained aversion in professional
+        contexts signals disengagement (Mehrabian). Gaze-away during retrieval ~1s, lasting ~6s.
         
         Professional context: off-camera gaze is judged negatively despite cognitive function.
         To avoid false positives: only score high when SUSTAINED (>8 frames) AND combined
@@ -1619,72 +1769,75 @@ class ExpressionSignifierEngine:
         yaw_dev = abs(y)
         total_dev = np.sqrt(pitch_dev * pitch_dev + yaw_dev * yaw_dev)
         
-        # Check DURATION of gaze aversion to distinguish processing from disengagement
+        n_recent = max(4, int(8 * self._fps / self._FPS_REF))
         recent_devs = []
-        for b in buf[-8:]:
+        for b in buf[-n_recent:]:
             bp = abs(b.get("pitch", 0))
             by = abs(b.get("yaw", 0))
             recent_devs.append(np.sqrt(bp * bp + by * by))
         
-        # Count consecutive frames with high deviation (sustained aversion)
+        # Count consecutive frames with high deviation (sustained aversion); use 10° not 8° to reduce FPs
         sustained_aversion = 0
         for d in reversed(recent_devs):
-            if d > 8.0:  # Threshold for "averted"
+            if d > 10.0:  # Threshold for "averted" (brief/small turns not treated as aversion)
                 sustained_aversion += 1
             else:
                 break
         
-        # Only score high if SUSTAINED (>6 frames = likely disengagement, not brief processing)
-        if sustained_aversion >= 8 and total_dev > 18.0:
-            # Long sustained + extreme = likely disengagement
+        ref = self._FPS_REF
+        s_10 = max(5, int(10 * self._fps / ref))
+        s_8 = max(4, int(8 * self._fps / ref))
+        s_6 = max(3, int(6 * self._fps / ref))
+        s_4 = max(2, int(4 * self._fps / ref))
+        # Highest band (55+): require sustained_aversion >= s_10; continuous bands below
+        if sustained_aversion >= s_10 and total_dev > 18.0:
             return 55.0 + min(40.0, (total_dev - 18.0) / 24.0 * 40.0)
-        elif sustained_aversion >= 6 and total_dev > 14.0:
-            # Moderate sustained
+        if sustained_aversion >= s_8 and total_dev > 18.0:
+            return 48.0 + min(10.0, (sustained_aversion - s_8) * 4.0)
+        if sustained_aversion >= s_6 and total_dev > 14.0:
             return 38.0 + min(22.0, sustained_aversion * 2.5)
-        elif sustained_aversion >= 4 and total_dev > 20.0:
-            # Brief but extreme
+        if sustained_aversion >= s_4 and total_dev > 20.0:
             return 28.0 + min(18.0, (total_dev - 20.0) / 15.0 * 18.0)
-        elif total_dev > 25.0:
-            # Current extreme (but not sustained—might be looking at notes, screen, etc.)
+        if total_dev > 25.0:
             return 18.0 + min(12.0, (total_dev - 25.0) / 20.0 * 12.0)
-        
-        # Brief or moderate aversion: likely cognitive processing, NOT resistance
-        return 6.0
+        # Smooth floor: slight deviation still raises score a little (6–16)
+        return 6.0 + min(10.0, total_dev * 0.35)
 
     def _g3_no_nod(self, buf: list) -> float:
         """
         No-nod: absence of vertical head movement. Research: nodding = agreement;
         absence of nodding = disengagement, resistance, or passive listening.
         
-        FALSE POSITIVE REDUCTION: "No nod" is ambiguous—could be neutral listening
-        or resistance. Use very strict thresholds and require SUSTAINED stillness.
-        Only score high when head is extremely still for extended period.
+        FALSE POSITIVE REDUCTION: time-based window (scaled 30–60 fps); stricter thresholds for score >= 65;
+        cap max at 58 so "no nod" does not dominate G3_raw unless combined with other cues.
         """
-        if len(buf) < 16:
-            return 12.0  # Warmup
-        pitches = [b["pitch"] for b in buf[-16:]]
+        win = max(12, int(24 * self._fps / self._FPS_REF))
+        if len(buf) < win:
+            return 12.0  # Warmup: longer window for sustained stillness
+        pitches = [b["pitch"] for b in buf[-win:]]
         pitch_std = float(np.std(pitches))
         pitch_range = float(np.max(pitches) - np.min(pitches))
         d = np.diff(pitches)
         zero_crossings = int(np.sum((d[:-1] * d[1:]) < 0))
         
-        # Stricter: require VERY still head for EXTENDED period
-        # Many people naturally don't nod much; avoid flagging them
+        # Score >= 65 only with pitch_std < 0.4 and pitch_range < 1.5; cap max at 58
+        if pitch_std < 0.4 and pitch_range < 1.5 and zero_crossings < 1:
+            return min(58.0, 65.0 + (0.4 - pitch_std) * 25.0)
         if pitch_std < 0.5 and pitch_range < 1.8 and zero_crossings < 1:
-            return 72.0  # Very still = possible resistance (reduced from 82)
-        elif pitch_std < 0.8 and pitch_range < 2.5 and zero_crossings < 2:
-            return 55.0 + (0.8 - pitch_std) / 0.3 * 12.0
-        elif pitch_std < 1.0 and zero_crossings < 1:
-            return 45.0
-        return 12.0  # Normal (some head movement)
+            return 48.0 + (0.5 - pitch_std) * 20.0
+        if pitch_std < 0.8 and pitch_range < 2.5 and zero_crossings < 2:
+            return 38.0 + (0.8 - pitch_std) / 0.3 * 12.0
+        if pitch_std < 1.0 and zero_crossings < 1:
+            return 28.0 + (1.0 - pitch_std) * 10.0
+        return 12.0 + max(0.0, (2.0 - pitch_std)) / 2.0 * 20.0
 
     def _g3_narrowed_pupils(self, cur: dict, buf: list) -> float:
         """
         Narrowed pupils proxy via eye squint (EAR). Research: pupil constriction
         correlates with negative arousal; we proxy via narrowed eyes (lower EAR).
         
-        FALSE POSITIVE REDUCTION: Uses baseline comparison (not absolute EAR) and
-        requires sustained narrowing. Similar to g2_eye_squint but for resistance context.
+        FALSE POSITIVE REDUCTION: Require 3 of last 4 frames with ear_ratio < 0.85 before
+        score > 25; strong band ear_ratio < 0.68. Reduces overlap with G2 eye_squint.
         """
         ear = cur.get("ear", 0.2)
         baseline_ear = self._baseline_ear if self._baseline_ear > 0.05 else 0.22
@@ -1695,17 +1848,81 @@ class ExpressionSignifierEngine:
             if recent_ear:
                 ear = float(np.median(recent_ear))
         
-        # Compare to baseline: narrowed = EAR below baseline
         ear_ratio = ear / baseline_ear if baseline_ear > 0 else 1.0
         
-        # Stricter thresholds: require clear narrowing below baseline
-        if ear_ratio < 0.70 and ear < 0.13:  # Strong narrowing
-            return 55.0 + min(35.0, (0.70 - ear_ratio) * 140.0)
-        if ear_ratio < 0.82 and ear < 0.16:  # Moderate narrowing
+        # Sustained narrowing: 3 of last 4 frames with ear_ratio < 0.85 before scoring above 25
+        if len(buf) >= 4:
+            recent_ratios = []
+            for b in buf[-4:]:
+                eb = b.get("ear", 0.2)
+                if b.get("is_blink", 0) < 0.5 and baseline_ear > 0:
+                    recent_ratios.append(eb / baseline_ear)
+            sustained = sum(1 for r in recent_ratios if r < 0.85) >= 3 if recent_ratios else False
+        else:
+            sustained = ear_ratio < 0.85
+        
+        if not sustained and ear_ratio >= 0.85:
+            return 15.0
+        if not sustained:
+            return min(25.0, 15.0 + (0.85 - ear_ratio) * 40.0)  # Cap at 25 until sustained
+        
+        # Strong band: ear_ratio < 0.68 (was 0.70)
+        if ear_ratio < 0.68 and ear < 0.13:
+            return 55.0 + min(35.0, (0.68 - ear_ratio) * 140.0)
+        if ear_ratio < 0.82 and ear < 0.16:
             return 38.0 + (0.82 - ear_ratio) * 120.0
-        if ear_ratio < 0.90:  # Slight narrowing
+        if ear_ratio < 0.90:
             return 22.0 + (0.90 - ear_ratio) * 150.0
-        return 15.0  # Normal eyes
+        return 15.0
+
+    def _g3_lip_corner_dip(self, lm: np.ndarray, cur: dict, buf: list) -> float:
+        """Sadness/disappointment leakage (FACS AU15). Mouth corners down."""
+        mouth_pts = _safe(lm, MOUTH)
+        if len(mouth_pts) < 6:
+            return 35.0
+        face_scale = max(1e-6, cur.get("face_scale", 50.0))
+        ly, ry = float(mouth_pts[0, 1]), float(mouth_pts[5, 1]) if len(mouth_pts) > 5 else float(mouth_pts[0, 1])
+        mid_y = float(np.mean(mouth_pts[:, 1]))
+        corners_down = (ly + ry) / 2 > mid_y + face_scale * 0.03
+        if corners_down:
+            dip_amt = ((ly + ry) / 2 - mid_y) / face_scale
+            return 50.0 + min(40.0, dip_amt * 300.0)
+        return 35.0
+
+    def _g3_brow_lower_sustained(self, buf: list) -> float:
+        """Sustained frown = negative affect."""
+        if len(buf) < 8:
+            return 35.0
+        heights = [(b.get("eyebrow_l", 0) + b.get("eyebrow_r", 0)) / 2 for b in buf[-8:]]
+        face_scale = buf[-1].get("face_scale", 50.0)
+        baseline = float(np.median(heights[:4])) if len(heights) >= 4 else heights[0]
+        cur_avg = float(np.mean(heights[-4:])) if len(heights) >= 4 else heights[-1]
+        lower_amt = (baseline - cur_avg) / max(face_scale * 0.06, 1e-6)
+        if lower_amt > 0.4:
+            return 52.0 + min(35.0, lower_amt * 40.0)
+        return 38.0
+
+    def _g3_eye_squeeze(self, cur: dict, buf: list) -> float:
+        """Tight lid closure = distress (FACS AU7). Stronger than eye_block."""
+        ear = cur.get("ear", 0.2)
+        baseline_ear = self._baseline_ear if self._baseline_ear > 0.05 else 0.22
+        if ear < 0.08 and (len(buf) < 4 or sum(1 for b in buf[-4:] if b.get("ear", 0.2) < 0.10) >= 2):
+            return 65.0 + min(25.0, (0.08 - ear) * 200.0)
+        if ear < 0.12:
+            return 48.0 + (0.12 - ear) * 100.0
+        return 38.0
+
+    def _g3_head_shake(self, buf: list) -> float:
+        """Lateral head movement = disagreement."""
+        if len(buf) < 10:
+            return 35.0
+        yaws = [b.get("yaw", 0) for b in buf[-10:]]
+        d = np.diff(yaws)
+        crosses = int(np.sum((d[:-1] * d[1:]) < 0))
+        yaw_std = float(np.std(yaws))
+        if crosses >= 2 and yaw_std > 2.0:
+            return 55.0 + min(30.0, crosses * 8.0 + yaw_std * 2.0)
+        return 38.0
 
     # ----- Group 4 -----
     def _g4_relaxed_exhale(self, buf: list) -> float:
@@ -1769,7 +1986,8 @@ class ExpressionSignifierEngine:
         # Mouth opening with mild tension (no big variance spike) can reach 55-62
         if mouth_opening and var_before > 0 and var_now <= var_before * 1.08:
             return 55.0 + min(7.0, (mar_now / max(baseline_mar, 0.04) - 1.0) * 35.0)
-        return 42.0
+        # Baseline: smooth increase with MAR so small mouth opening still raises score slightly
+        return 42.0 + min(8.0, mar_now * 40.0)
 
     def _g4_fixed_gaze(self, buf: list, w: int, h: int) -> float:
         """
@@ -1795,16 +2013,16 @@ class ExpressionSignifierEngine:
         pitch_range = float(np.max(pitches) - np.min(pitches))
         head_range = np.sqrt(yaw_range * yaw_range + pitch_range * pitch_range)
         
-        # Stricter: require both low std AND low range
+        # Continuous: low head_std/range = high (fixed gaze); smooth decay as movement increases
         if head_std < 1.2 and head_range < 3.5:
-            return 82.0  # Very fixed (looking at one spot)
+            return 82.0
         if head_std < 2.5 and head_range < 6.0:
-            return 68.0 + (2.5 - head_std) / 1.3 * 10.0  # 68-78
+            return 68.0 + (2.5 - head_std) / 1.3 * 10.0
         if head_std < 4.0 and head_range < 10.0:
-            return 55.0 + (4.0 - head_std) / 1.5 * 10.0  # 55-65
+            return 55.0 + (4.0 - head_std) / 1.5 * 10.0
         if head_std < 6.0:
-            return 45.0 + (6.0 - head_std) / 2.0 * 8.0  # 45-53
-        return 42.0  # Looking around; low score
+            return 45.0 + (6.0 - head_std) / 2.0 * 8.0
+        return 42.0 + max(0.0, (8.0 - head_std)) / 8.0 * 5.0  # Smooth floor 42-47
 
     def _g4_smile_transition(self, buf: list, duchenne: float) -> float:
         """
@@ -1815,21 +2033,46 @@ class ExpressionSignifierEngine:
         frame) and stable mouth pattern to distinguish genuine smiles from brief
         expressions or noise.
         """
-        if len(buf) < 12 or duchenne < 52:
+        if len(buf) < 12:
             return 45.0
         mars = [b["mar"] for b in buf[-12:]]
         mar_mean = float(np.mean(mars[-6:]))
         mar_std = float(np.std(mars[-6:]))
-        
-        # Sustained = stable MAR with slight opening (not just frozen face)
         sustained = mar_mean > 0.14 and mar_std < 0.04
-        
-        # Also check if Duchenne has been elevated for multiple frames
-        # (requires Duchenne to be stored in buffer or estimated)
-        if sustained and duchenne >= 62:  # Strong sustained smile
-            return 78.0 + min(12.0, (duchenne - 62) * 0.6)
-        if sustained and duchenne >= 56:  # Moderate sustained smile
-            return 65.0 + min(10.0, (duchenne - 56) * 0.8)
-        if duchenne >= 58:  # Current smile but not sustained
-            return 55.0 + min(8.0, (duchenne - 58) * 0.5)
-        return 46.0
+        # Continuous in duchenne: base 46 at 52, ramp up with duchenne and sustained
+        base = 46.0 + max(0.0, duchenne - 52.0) * 0.5  # 46-53 for duchenne 52-58
+        if sustained:
+            base = base + 12.0 + max(0.0, duchenne - 56.0) * 0.8  # sustained adds 12+ and duchenne bonus
+        if duchenne >= 62 and sustained:
+            base = 78.0 + min(12.0, (duchenne - 62) * 0.6)
+        elif duchenne >= 58:
+            base = max(base, 55.0 + min(8.0, (duchenne - 58) * 0.5))
+        return float(max(45.0, min(100.0, base)))
+
+    def _g4_mouth_relax(self, buf: list) -> float:
+        """Jaw/mouth relaxation = release (Cialdini)."""
+        if len(buf) < 8:
+            return 48.0
+        mar_now = float(np.mean([b["mar"] for b in buf[-3:]]))
+        mar_before = float(np.mean([b["mar"] for b in buf[-8:-4]]))
+        baseline = max(0.06, self._baseline_mar)
+        if mar_before > 0.03 and mar_now > mar_before * 1.08 and mar_now > baseline * 1.05:
+            return 60.0 + min(30.0, (mar_now / mar_before - 1.0) * 150.0)
+        if mar_now > baseline * 1.05:
+            return 52.0 + min(10.0, (mar_now / baseline - 1.0) * 50.0)
+        return 45.0
+
+    def _g4_smile_sustain(self, buf: list, duchenne: float) -> float:
+        """Smile duration = authentic positive affect. Sustained Duchenne/MAR over frames."""
+        if len(buf) < 12:
+            return 45.0
+        mar_mean = float(np.mean([b["mar"] for b in buf[-6:]]))
+        mar_std = float(np.std([b["mar"] for b in buf[-6:]]))
+        sustained_open = mar_mean > 0.14 and mar_std < 0.04
+        if duchenne >= 60 and sustained_open:
+            return 72.0 + min(18.0, (duchenne - 60) * 0.6)
+        if duchenne >= 56 and sustained_open:
+            return 62.0 + min(12.0, (duchenne - 56) * 2.0)
+        if duchenne >= 52:
+            return 50.0 + (duchenne - 52) * 1.5
+        return 45.0

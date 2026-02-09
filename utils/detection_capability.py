@@ -98,19 +98,21 @@ def recommend_detection_method(
     azure_latency_ms: Optional[float] = None,
     latency_threshold_ms: Optional[float] = None,
     prefer_local: bool = False,
+    return_unified_when_viable: bool = True,
 ) -> str:
     """
-    Recommend detection method: "mediapipe" or "azure_face_api" based on
+    Recommend detection method: "mediapipe", "azure_face_api", or "unified" based on
     device tier and Azure/network latency.
 
     Rules:
     - If Azure not available or prefer_local → mediapipe.
     - If device is low tier → mediapipe (reduce cloud dependency on weak devices).
     - If Azure latency is above threshold → mediapipe (slow network).
-    - Otherwise → azure_face_api (cloud emotions + 27 landmarks).
+    - When return_unified_when_viable is True and tier is medium/high with latency
+      below threshold → "unified" (MediaPipe + Azure fusion). Otherwise → "azure_face_api".
 
     Returns:
-        "mediapipe" | "azure_face_api"
+        "mediapipe" | "unified" | "azure_face_api"
     """
     if not azure_available or prefer_local:
         return "mediapipe"
@@ -123,10 +125,14 @@ def recommend_detection_method(
     if azure_latency_ms is not None and azure_latency_ms > threshold:
         return "mediapipe"
     if tier == DEVICE_TIER_HIGH:
+        if return_unified_when_viable:
+            return "unified"
         return "azure_face_api"
     # Medium: prefer MediaPipe unless latency is very low (favor stability)
     if azure_latency_ms is not None and azure_latency_ms > threshold * 0.6:
         return "mediapipe"
+    if return_unified_when_viable:
+        return "unified"
     return "azure_face_api"
 
 
@@ -146,17 +152,22 @@ def evaluate_capability(
     except Exception:
         azure_available = False
     latency_ms = get_azure_latency_ms(base_url=base_url) if requests else None
+    threshold = getattr(config, "AZURE_LATENCY_THRESHOLD_MS", DEFAULT_AZURE_LATENCY_THRESHOLD_MS)
     method = recommend_detection_method(
         azure_available=bool(azure_available),
         device_tier=tier,
         azure_latency_ms=latency_ms,
+        latency_threshold_ms=threshold,
+        return_unified_when_viable=True,
     )
     if not azure_available:
         reason = "Azure Face API not configured or unavailable"
     elif tier == DEVICE_TIER_LOW:
         reason = "Device tier is low; using local MediaPipe"
-    elif latency_ms is not None and latency_ms > getattr(config, "AZURE_LATENCY_THRESHOLD_MS", DEFAULT_AZURE_LATENCY_THRESHOLD_MS):
+    elif latency_ms is not None and latency_ms > threshold:
         reason = f"Azure latency {latency_ms:.0f} ms above threshold; using MediaPipe"
+    elif method == "unified":
+        reason = f"Device tier {tier}, latency {latency_ms} ms; using unified (MediaPipe + Azure)"
     else:
         reason = f"Device tier {tier}, latency {latency_ms} ms; using Azure Face API"
     return tier, method, latency_ms, reason

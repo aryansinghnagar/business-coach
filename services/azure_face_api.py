@@ -163,7 +163,7 @@ class AzureFaceAPIService:
                         error_msg += f": {error_info.get('message', 'Unknown error')}"
                         if "code" in error_info:
                             error_msg += f" (code: {error_info['code']})"
-                except:
+                except Exception:
                     error_msg += f": {response.text[:200]}"
                 
                 raise requests.RequestException(error_msg)

@@ -6,7 +6,7 @@ for avatar connections.
 """
 
 import requests
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import config
 
 
@@ -82,5 +82,13 @@ class AzureSpeechService:
             )
 
 
-# Global service instance
-speech_service = AzureSpeechService()
+# Lazy singleton: initialized on first use to avoid loading at import time
+_speech_service: Optional[AzureSpeechService] = None
+
+
+def get_speech_service() -> AzureSpeechService:
+    """Return the Speech service instance, creating it on first call (lazy init)."""
+    global _speech_service
+    if _speech_service is None:
+        _speech_service = AzureSpeechService()
+    return _speech_service
