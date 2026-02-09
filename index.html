@@ -434,6 +434,8 @@
             left: auto;
             transform: none;
             max-width: 440px;
+            max-height: 220px;
+            overflow-y: auto;
             width: 100%;
             padding: var(--space-lg) var(--space-xl);
             background: var(--sidebar-bg);
@@ -443,6 +445,8 @@
             color: var(--text-primary);
             font-size: var(--text-base);
             line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
             z-index: 1;
             animation: toastIn 0.3s ease;
         }
@@ -550,7 +554,45 @@
             to { opacity: 0; transform: translateY(-12px); }
         }
 
-        /* Engagement Metrics Panel (MediaPipe 30 signifiers or Azure emotions + composites) */
+        /* Context & AI section: last context sent + AI response + additional context */
+        .context-ai-section {
+            flex: 0 0 auto;
+            max-height: 280px;
+        }
+        .context-ai-section .sidebar-section-title { margin-bottom: var(--space-sm); }
+        .context-ai-row { margin-bottom: var(--space-sm); }
+        .context-ai-row:last-of-type { margin-bottom: 0; }
+        .context-ai-label {
+            display: block;
+            font-size: var(--text-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 2px;
+        }
+        .context-ai-box {
+            max-height: 80px;
+            font-size: var(--text-sm);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .context-ai-timestamp {
+            font-size: var(--text-xs);
+            color: var(--text-muted-strong);
+            margin-top: 2px;
+        }
+        /* Engagement metrics redirect (full metrics are in the Dashboard) */
+        /* Sidepanel: engagement metrics and context/AI are retained for functionality but not displayed (see Dashboard for metrics and context). */
+        .sidebar-section.context-ai-section,
+        .sidebar-section.engagement-metrics-redirect {
+            display: none !important;
+        }
+        .engagement-metrics-redirect-text {
+            font-size: var(--text-sm);
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin: 0;
+        }
+        /* Legacy Engagement Metrics Panel (no longer used; metrics in Dashboard) */
         .sidebar-section.engagement-signifiers-panel {
             flex: 0 0 auto;
             height: 380px;
@@ -589,7 +631,8 @@
             background: var(--surface);
         }
         #signifierPanelContainer,
-        #azureMetricsPanelContainer.metrics-panel-container {
+        #azureMetricsPanelContainer.metrics-panel-container,
+        #compositeMetricsPanelContainer.metrics-panel-container {
             flex: 1;
             min-height: 0;
             overflow: hidden;
@@ -1257,6 +1300,7 @@
                     </div>
                     <div class="button-group">
                         <button id="initAvatar" onclick="initializeInsightsSession()">Start Insights Session</button>
+                        <button id="openDashboardBtn" type="button" class="secondary" title="Open real-time dashboard in a new window">Open Dashboard</button>
                         <button id="selectVideoSource" onclick="promptVideoSourceSelection(true)" class="secondary" style="display: none;">Change Video Source</button>
                         <button id="stopPartnerSharing" onclick="stopPartnerSharing()" class="secondary" style="display: none;" title="Stop sharing your screen/tab for Meeting Partner Video">Stop sharing</button>
                         <button id="microphone" onclick="microphone()" disabled>Start Microphone</button>
@@ -1274,6 +1318,20 @@
                     <div id="insightTranscript" class="insight-transcript-box" aria-live="polite" title="Insight responses (visual + aural cues)">No insights yet.</div>
                 </div>
                 
+                <!-- Context & AI: last context sent to Foundry and last AI response (sidebar + dashboard) -->
+                <div id="contextAndAiSection" class="sidebar-section context-ai-section">
+                    <div class="sidebar-section-title">Context & AI</div>
+                    <div class="context-ai-row">
+                        <label class="context-ai-label">Context passed to Azure AI Foundry</label>
+                        <div id="contextPassedToFoundry" class="insight-transcript-box context-ai-box" aria-live="polite" title="Most recent context sent to the model">—</div>
+                    </div>
+                    <div class="context-ai-row">
+                        <label class="context-ai-label">AI response</label>
+                        <div id="aiResponseText" class="insight-transcript-box context-ai-box" aria-live="polite" title="Most recent AI reply">—</div>
+                    </div>
+                    <div id="contextAndResponseTimestamp" class="context-ai-timestamp" aria-live="polite"></div>
+                </div>
+                
                 <!-- Video Feed Section (confined to sidebar) -->
                 <div class="sidebar-section video-feed-section">
                     <div class="sidebar-section-title">Video Feed</div>
@@ -1286,13 +1344,10 @@
                     </div>
                 </div>
                 
-                <!-- Engagement Metrics: MediaPipe (30 signifiers) or Azure Face API (emotions + B2B composites) -->
-                <div class="sidebar-section engagement-signifiers-panel">
-                    <div class="sidebar-section-title engagement-metrics-title">Engagement Metrics</div>
-                    <div id="engagementMetricsHint" class="engagement-metrics-hint" style="display: none;"></div>
-                    <div id="engagementMetricsStatus" class="engagement-metrics-status" aria-live="polite"></div>
-                    <div id="signifierPanelContainer"></div>
-                    <div id="azureMetricsPanelContainer" class="metrics-panel-container" style="display: none;"></div>
+                <!-- Engagement metrics moved to Dashboard (Open Dashboard button above) -->
+                <div class="sidebar-section engagement-metrics-redirect">
+                    <div class="sidebar-section-title">Engagement Metrics</div>
+                    <p class="engagement-metrics-redirect-text">All engagement metrics (basic, signifiers, composite, and Azure) are shown in the <strong>Dashboard</strong>. Click <strong>Open Dashboard</strong> above to view them in a separate window.</p>
                 </div>
             </div>
         </div>
@@ -1306,7 +1361,10 @@
     <!-- Modular JavaScript Modules -->
     <script src="/static/js/signifier-panel.js"></script>
     <script src="/static/js/azure-metrics-panel.js"></script>
+    <script src="/static/js/composite-metrics-panel.js"></script>
     <script src="/static/js/engagement-detector.js"></script>
+    <script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
+    <script src="/static/js/acoustic-analyzer.js"></script>
     <script src="/static/js/session-manager.js"></script>
     <script src="/static/js/avatar-chat-manager.js"></script>
     <script src="/static/js/video-source-selector.js"></script>
@@ -1317,13 +1375,15 @@
         // ========================================================================
         // Flow: 1) Insights Session takes audio from feed (STT) -> transcript to backend
         //       2) Engagement detector takes video from feed -> visual cues (G1-G4 spikes)
-        //       3) On spike: backend fuses visual + aural context -> Azure OpenAI -> insight
+        //       3) On spike: backend fuses visual + aural context -> Azure AI Foundry -> insight
         //       4) Frontend: popup + Insight Transcript box + TTS (avatar)
         // ========================================================================
         // Global Variables & Configuration
         // ========================================================================
         var speechRecognizer
         var feedSpeechRecognizer = null  // STT on meeting partner (feed) audio for aural cues; transcript sent to backend
+        var _partnerAudioStream = null   // Partner audio stream stored when source has audio; STT started only on "Start Microphone"
+        var _partnerAudioStreamFromMic = false  // True when stream is from getUserMedia (mic); stop tracks on cleanup
         var avatarSynthesizer
         var peerConnection
         var peerConnectionDataChannel
@@ -1335,6 +1395,7 @@
         var engagementDetector = null
         var signifierPanel = null
         var azureMetricsPanel = null
+        var compositeMetricsPanel = null
         var videoSourceSelector = null
         
         // UI State
@@ -1365,7 +1426,7 @@
         
         /**
          * Append an insight response to the sidebar transcript box (for verification).
-         * @param {string} message - Insight text from Azure OpenAI
+         * @param {string} message - Insight text from Azure AI Foundry
          */
         function appendToInsightTranscript(message) {
             var box = document.getElementById('insightTranscript');
@@ -1414,7 +1475,7 @@
         
         /**
          * Handle metric spike alert: show popup, append to transcript, speak via TTS.
-         * Flow: visual spike + optional aural context -> Azure OpenAI -> popup + TTS.
+         * Flow: visual spike + optional aural context -> Azure AI Foundry -> popup + TTS.
          */
         function handleMetricSpikeAlert(alert) {
             if (!alert || !alert.message) return;
@@ -1427,6 +1488,7 @@
             var layer = document.getElementById('insightPopupLayer');
             if (el && layer) {
                 if (spikeToastTimeout) clearTimeout(spikeToastTimeout);
+                // Support multi-line insights: show newlines (white-space: pre-wrap on toast)
                 el.textContent = msg;
                 el.style.display = 'block';
                 el.classList.remove('hiding');
@@ -1471,7 +1533,7 @@
                     }
                 });
             }
-            // 3. TTS via avatar (when session is active; speak() handles internal null checks)
+            // 3. TTS via avatar only after "Start Insights Session" (popup always shown above)
             if (avatarChatManager && avatarAudioInitialized && sessionActive) {
                 try {
                     avatarChatManager.interruptCurrentResponse();
@@ -1497,17 +1559,15 @@
         function initializeSystems() {
             try {
                 var apiBase = getApiBase();
-                // Initialize 30-metrics signifier panel (MediaPipe)
-                signifierPanel = new SignifierPanel({ containerId: 'signifierPanelContainer' });
-                signifierPanel.init();
-                // Initialize Azure Face API metrics panel (emotions + B2B composites; shown only when Azure)
-                azureMetricsPanel = new AzureMetricsPanel({ containerId: 'azureMetricsPanelContainer' });
-                azureMetricsPanel.init();
-                
-                // Initialize engagement detector (no bar; spike alerts show popup)
+                // Engagement metrics are displayed in the Dashboard (open via Open Dashboard button)
+                signifierPanel = null;
+                azureMetricsPanel = null;
+                compositeMetricsPanel = null;
+                // Initialize engagement detector (panels null; metrics available via GET /engagement/state and Dashboard)
                 engagementDetector = new EngagementDetector({
-                    signifierPanel: signifierPanel,
-                    azureMetricsPanel: azureMetricsPanel,
+                    signifierPanel: null,
+                    azureMetricsPanel: null,
+                    compositeMetricsPanel: null,
                     apiBaseUrl: apiBase,
                     pollInterval: 200,
                     onAlert: handleMetricSpikeAlert,
@@ -1548,6 +1608,29 @@
                         if (section) section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                     });
                 }
+                var openDashboardBtn = document.getElementById('openDashboardBtn');
+                if (openDashboardBtn) {
+                    openDashboardBtn.addEventListener('click', function () {
+                        window.open(getApiBase() + '/dashboard', '_blank', 'width=1000,height=700');
+                    });
+                }
+                // Context & AI: poll last context and response every 7s
+                if (contextAndResponsePollIntervalId) clearInterval(contextAndResponsePollIntervalId);
+                refreshContextAndResponse();
+                contextAndResponsePollIntervalId = setInterval(refreshContextAndResponse, 7000);
+                
+                // Periodic context push: when session is live, push context to Foundry every 40s
+                if (contextPushIntervalId) clearInterval(contextPushIntervalId);
+                contextPushIntervalId = setInterval(function () {
+                    if (sessionManager && sessionManager.isSessionActive && typeof fetch !== 'undefined') {
+                        fetch(getApiBase() + '/api/context-push', { method: 'POST' })
+                            .then(function (r) { return r.ok ? r.json() : null; })
+                            .then(function (data) {
+                                if (data && typeof refreshContextAndResponse === 'function') refreshContextAndResponse();
+                            })
+                            .catch(function () {});
+                    }
+                }, 40000);
                 
                 console.log('Core systems initialized (engagement + session manager + video source selector)');
             } catch (error) {
@@ -1571,9 +1654,33 @@
         }
         var apiBaseUrl = getApiBase();
         
+        /** Poll interval for Context & AI sidebar (context-and-response). */
+        var contextAndResponsePollIntervalId = null;
+        /** Interval for periodic context push when session is live. */
+        var contextPushIntervalId = null;
+        /**
+         * Fetch and display last context sent to Foundry and last AI response.
+         * Called on an interval and after chat stream completion.
+         */
+        function refreshContextAndResponse() {
+            fetch(getApiBase() + '/api/engagement/context-and-response?t=' + Date.now(), { method: 'GET' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                    if (!data) return;
+                    var ctxEl = document.getElementById('contextPassedToFoundry');
+                    var respEl = document.getElementById('aiResponseText');
+                    var tsEl = document.getElementById('contextAndResponseTimestamp');
+                    if (ctxEl) ctxEl.textContent = (data.contextSent && data.contextSent.length) ? data.contextSent : '—';
+                    if (respEl) respEl.textContent = (data.response && data.response.length) ? data.response : '—';
+                    if (tsEl) tsEl.textContent = data.timestamp ? 'Updated ' + new Date(data.timestamp * 1000).toLocaleTimeString() : '';
+                })
+                .catch(function () {});
+        }
+        if (typeof window !== 'undefined') window.refreshContextAndResponse = refreshContextAndResponse;
+        
         /**
          * Show the engagement detection video feed in the main display area.
-         * Uses multipart/x-mixed-replace streaming for efficient frame updates (~30 FPS).
+         * Uses multipart/x-mixed-replace streaming for efficient frame updates (30–60 FPS).
          * The backend streams JPEG frames continuously until the feed is hidden.
          */
         function showEngagementFeed() {
@@ -1644,10 +1751,18 @@
          * 
          * @param {Object} selection - Selected video source options
          */
+        function stopPartnerAudioStreamIfNeeded() {
+            if (_partnerAudioStreamFromMic && _partnerAudioStream) {
+                _partnerAudioStream.getTracks().forEach(function (t) { t.stop(); });
+            }
+            _partnerAudioStreamFromMic = false;
+            _partnerAudioStream = null;
+        }
         async function handleVideoSourceSelected(selection) {
-            const { sourceType, sourcePath, file, usePartnerAudio } = selection;
+            const { sourceType, sourcePath, file, usePartnerAudio, useMicrophoneAudio } = selection;
             
             try {
+                stopPartnerAudioStreamIfNeeded();
                 // If file is selected, upload it first
                 let finalSourcePath = sourcePath;
                 
@@ -1687,8 +1802,12 @@
                 if (sourceType === 'partner' && sessionManager && engagementDetector) {
                     let stream;
                     try {
-                        // Request audio when available so partner speech can be sent to backend for insight generation
-                        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                        // Browser picker (tab/window/screen); request audio for speech cues when sharing a tab
+                        var displayOpts = { video: true, audio: true };
+                        if (/Chrome|Chromium|Edg\//.test(navigator.userAgent) && !/Firefox/.test(navigator.userAgent)) {
+                            displayOpts.selfBrowserSurface = 'exclude';
+                        }
+                        stream = await navigator.mediaDevices.getDisplayMedia(displayOpts);
                     } catch (shareErr) {
                         if (shareErr.name === 'NotAllowedError') {
                             console.log('Share canceled by user');
@@ -1707,9 +1826,12 @@
                     setEngagementHint('');
                     engagementDetector.startPartnerFrameStream(stream);
                     if (stream.getAudioTracks().length > 0) {
-                        await startFeedAudioTranscript(stream);
+                        _partnerAudioStream = stream;
+                        console.log('Partner audio stored; start microphone when ready for aural cues.');
+                    } else {
+                        _partnerAudioStream = null;
                     }
-                    console.log('Engagement detection started with Meeting Partner Video (video → engagement, audio → aural cues)');
+                    console.log('Engagement detection started with Meeting Partner Video (video → engagement, audio → aural cues when mic started)');
                     videoSourcePromptShown = true;
                     if (!sessionActive && typeof initializeInsightsSession === 'function') {
                         initializeInsightsSession().catch(function (err) {
@@ -1725,13 +1847,32 @@
                     setEngagementHint('');
                     console.log('Engagement detection started with source: ' + sourceType);
                 }
-                if ((sourceType === 'webcam' || sourceType === 'file') && usePartnerAudio) {
+                if ((sourceType === 'webcam' || sourceType === 'file') && useMicrophoneAudio) {
+                    try {
+                        var audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        if (audioStream.getAudioTracks().length > 0) {
+                            _partnerAudioStream = audioStream;
+                            _partnerAudioStreamFromMic = true;
+                            console.log('Microphone audio stored for speech and acoustic analysis; start microphone when ready for aural cues.');
+                        } else {
+                            _partnerAudioStream = null;
+                            _partnerAudioStreamFromMic = false;
+                        }
+                    } catch (audioErr) {
+                        if (audioErr.name === 'NotAllowedError') {
+                            console.log('User denied microphone access; continuing without partner audio.');
+                        } else {
+                            console.warn('Could not start microphone for partner audio:', audioErr);
+                        }
+                    }
+                } else if ((sourceType === 'webcam' || sourceType === 'file') && usePartnerAudio) {
                     try {
                         var audioStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
                         if (audioStream.getAudioTracks().length > 0) {
-                            await startFeedAudioTranscript(audioStream);
-                            console.log('Meeting partner audio (speech cues) started for webcam/file source.');
+                            _partnerAudioStream = audioStream;
+                            console.log('Partner audio stored for webcam/file source; start microphone when ready for aural cues.');
                         } else {
+                            _partnerAudioStream = null;
                             console.log('Display media has no audio track; continuing without partner audio.');
                         }
                     } catch (audioErr) {
@@ -1762,7 +1903,10 @@
         function updateStopPartnerSharingButton(isActive) {
             var btn = document.getElementById('stopPartnerSharing');
             if (btn) btn.style.display = isActive ? 'inline-block' : 'none';
-            if (!isActive) stopFeedAudioTranscript();
+            if (!isActive) {
+                stopFeedAudioTranscript();
+                stopPartnerAudioStreamIfNeeded();
+            }
         }
         
         /**
@@ -1773,15 +1917,17 @@
                 engagementDetector.stopPartnerFrameStream();
             }
             stopFeedAudioTranscript();
+            stopPartnerAudioStreamIfNeeded();
         }
         
         /**
          * Start speech recognition on the meeting partner (feed) audio stream.
          * Recognized text is sent to POST /engagement/transcript for B2B insight generation (aural cues).
-         * Runs in parallel with engagement detector (video cues). Use when source is 'partner' and stream has audio.
+         * Called when user presses "Start Microphone" and partner audio stream is stored (_partnerAudioStream).
          * @param {MediaStream} stream - getDisplayMedia stream with audio track (meeting partner)
+         * @param {function} [onStarted] - optional callback when recognition has started (e.g. to update mic button)
          */
-        async function startFeedAudioTranscript(stream) {
+        async function startFeedAudioTranscript(stream, onStarted) {
             if (!stream || stream.getAudioTracks().length === 0) return;
             stopFeedAudioTranscript();
             if (!appConfig) await loadConfig();
@@ -1828,7 +1974,12 @@
                     }).catch(function (err) { console.warn('Feed transcript POST failed:', err); });
                 };
                 feedSpeechRecognizer.startContinuousRecognitionAsync(
-                    function () { console.log('Feed audio (aural cues) transcript started.'); },
+                    function () {
+                        console.log('Feed audio (aural cues) transcript started.');
+                        var acousticEnabled = appConfig.acoustic && appConfig.acoustic.acousticAnalysisEnabled !== false;
+                        if (window.AcousticAnalyzer) window.AcousticAnalyzer.start(stream, getApiBase(), acousticEnabled);
+                        if (typeof onStarted === 'function') onStarted();
+                    },
                     function (err) { console.warn('Feed audio transcript start failed:', err); feedSpeechRecognizer = null; }
                 );
             } catch (err) {
@@ -1841,6 +1992,7 @@
          * Stop speech recognition on feed audio and release recognizer.
          */
         function stopFeedAudioTranscript() {
+            if (window.AcousticAnalyzer) window.AcousticAnalyzer.stop();
             if (!feedSpeechRecognizer) return;
             try {
                 feedSpeechRecognizer.stopContinuousRecognitionAsync(function () {}, function () {});
@@ -1890,7 +2042,7 @@
          * Start Insights Session (audio-only).
          * Pairs speech cues (from meeting partner audio when available) with visual cues
          * (engagement detector) for real-time actionable insights. Popup messages are
-         * generated by Azure OpenAI when a moment is detected (e.g. spike in interest,
+         * generated by Azure AI Foundry when a moment is detected (e.g. spike in interest,
          * confusion, resistance, or decision-ready). See docs/DOCUMENTATION.md.
          */
         async function initializeInsightsSession() {
@@ -2132,6 +2284,7 @@
                 await sessionManager.stopSession();
             }
             stopFeedAudioTranscript();
+            stopPartnerAudioStreamIfNeeded();
 
             try {
                 if (avatarSynthesizer) avatarSynthesizer.close();
@@ -2303,24 +2456,46 @@
 
 
         function microphone() {
-            if (!speechRecognizer || !avatarAudioInitialized || !sessionActive) {
-                alert('Please start insights session first, then start microphone.')
-                return
+            if (!avatarAudioInitialized || !sessionActive) {
+                alert('Please start insights session first, then start microphone.');
+                return;
             }
 
-            if (document.getElementById('microphone').innerHTML === 'Stop Microphone') {
-                document.getElementById('microphone').disabled = true
-                speechRecognizer.stopContinuousRecognitionAsync(() => {
-                    document.getElementById('microphone').innerHTML = 'Start Microphone'
-                    document.getElementById('microphone').disabled = false
-                }, (err) => {
-                    console.log("Failed to stop continuous recognition:", err)
-                    document.getElementById('microphone').disabled = false
-                })
-                return
+            var micBtn = document.getElementById('microphone');
+            if (micBtn && micBtn.innerHTML === 'Stop Microphone') {
+                micBtn.disabled = true;
+                if (feedSpeechRecognizer) {
+                    stopFeedAudioTranscript();
+                    micBtn.innerHTML = 'Start Microphone';
+                    micBtn.disabled = false;
+                } else if (speechRecognizer) {
+                    speechRecognizer.stopContinuousRecognitionAsync(function () {
+                        micBtn.innerHTML = 'Start Microphone';
+                        micBtn.disabled = false;
+                    }, function (err) {
+                        console.log('Failed to stop continuous recognition:', err);
+                        micBtn.disabled = false;
+                    });
+                }
+                return;
             }
 
-            document.getElementById('microphone').disabled = true
+            micBtn = document.getElementById('microphone');
+            if (micBtn) micBtn.disabled = true;
+
+            if (_partnerAudioStream) {
+                startFeedAudioTranscript(_partnerAudioStream, function () {
+                    var el = document.getElementById('microphone');
+                    if (el) { el.innerHTML = 'Stop Microphone'; el.disabled = false; }
+                });
+                return;
+            }
+
+            if (!speechRecognizer) {
+                if (micBtn) micBtn.disabled = false;
+                alert('Speech recognizer not ready. Start insights session first.');
+                return;
+            }
 
             // Pause avatar as soon as user starts speaking (interim results)
             speechRecognizer.recognizing = (s, e) => {

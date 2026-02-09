@@ -1,27 +1,45 @@
 """
 Configuration for Business Meeting Copilot.
 
-Centralized settings for Azure (OpenAI, Speech, Face API, Cognitive Search),
+Centralized settings for Azure AI Foundry, Speech, Face API, Cognitive Search,
 face detection, signifier weights, avatar, and server. Override via environment
-variables in production; never commit secrets. See docs/DOCUMENTATION.md §3.
+variables in production; never commit secrets. See docs/DOCUMENTATION.md.
 """
 
 import os
 from typing import Optional
 
 # ============================================================================
-# Azure OpenAI Configuration
+# Azure AI Foundry Configuration (upgraded from Azure OpenAI)
 # ============================================================================
-AZURE_OPENAI_KEY: str = os.getenv(
+# Env vars: AZURE_FOUNDRY_* (primary) or AZURE_OPENAI_* (fallback for backward compatibility).
+# Sanitize to avoid 404: strip whitespace, normalize endpoint (no trailing slash).
+def _sanitize_azure_foundry_config() -> None:
+    global AZURE_FOUNDRY_KEY, AZURE_FOUNDRY_ENDPOINT, FOUNDRY_DEPLOYMENT_NAME, AZURE_FOUNDRY_API_VERSION
+    AZURE_FOUNDRY_KEY = (AZURE_FOUNDRY_KEY or "").strip()
+    FOUNDRY_DEPLOYMENT_NAME = (FOUNDRY_DEPLOYMENT_NAME or "gpt-4o").strip()
+    AZURE_FOUNDRY_API_VERSION = (AZURE_FOUNDRY_API_VERSION or "2024-11-20").strip()
+    ep = (AZURE_FOUNDRY_ENDPOINT or "").strip().rstrip("/")
+    AZURE_FOUNDRY_ENDPOINT = ep if ep else ""
+
+
+AZURE_FOUNDRY_KEY: str = os.getenv("AZURE_FOUNDRY_KEY") or os.getenv(
     "AZURE_OPENAI_KEY",
     "FVtVMw9LLxCtasbLPTlT4XtjNGEOLLg4yyhFUBLWhatgGaszcvyBJQQJ99CAAC77bzfXJ3w3AAABACOGAk0e"
 )
-AZURE_OPENAI_ENDPOINT: str = os.getenv(
+AZURE_FOUNDRY_ENDPOINT: str = os.getenv("AZURE_FOUNDRY_ENDPOINT") or os.getenv(
     "AZURE_OPENAI_ENDPOINT",
     "https://meeting-copilot-brain.openai.azure.com/"
 )
-DEPLOYMENT_NAME: str = os.getenv("DEPLOYMENT_NAME", "gpt-4o")
-AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-11-20")
+FOUNDRY_DEPLOYMENT_NAME: str = os.getenv("FOUNDRY_DEPLOYMENT_NAME") or os.getenv("DEPLOYMENT_NAME", "gpt-4o")
+AZURE_FOUNDRY_API_VERSION: str = os.getenv("AZURE_FOUNDRY_API_VERSION") or os.getenv("AZURE_OPENAI_API_VERSION", "2024-11-20")
+_sanitize_azure_foundry_config()
+
+# Backward compatibility aliases (deprecated; use AZURE_FOUNDRY_* / FOUNDRY_DEPLOYMENT_NAME)
+AZURE_OPENAI_KEY: str = AZURE_FOUNDRY_KEY
+AZURE_OPENAI_ENDPOINT: str = AZURE_FOUNDRY_ENDPOINT
+DEPLOYMENT_NAME: str = FOUNDRY_DEPLOYMENT_NAME
+AZURE_OPENAI_API_VERSION: str = AZURE_FOUNDRY_API_VERSION
 
 # ============================================================================
 # Azure Speech Service Configuration
@@ -52,9 +70,9 @@ AZURE_FACE_API_REGION: str = os.getenv("AZURE_FACE_API_REGION", "centralindia")
 # Face Detection Configuration
 # ============================================================================
 # Options: "mediapipe" | "azure_face_api" | "auto" | "unified"
-# mediapipe (default): Local, reliable, no API dependency. Use "auto" to let app choose.
-# auto: App chooses from device tier + network latency (may pick azure_face_api)
-FACE_DETECTION_METHOD: str = os.getenv("FACE_DETECTION_METHOD", "mediapipe")
+# auto (default): App chooses unified (MediaPipe+Azure) or mediapipe based on device tier + latency.
+# mediapipe: Local only. unified: Both MediaPipe and Azure (fused). azure_face_api: Azure only.
+FACE_DETECTION_METHOD: str = os.getenv("FACE_DETECTION_METHOD", "auto")
 
 # Minimum confidence for face detection (0.01-0.9). Lower = more permissive in suboptimal lighting.
 # Default 0.05 is very permissive to handle various webcam/lighting conditions.
@@ -63,6 +81,15 @@ MIN_FACE_CONFIDENCE: float = float(os.getenv("MIN_FACE_CONFIDENCE", "0.05"))
 # Lightweight mode: MediaPipe only, reduced buffer, process every 2nd frame.
 # Use on devices with less computational power for real-time processing.
 LIGHTWEIGHT_MODE: bool = os.getenv("LIGHTWEIGHT_MODE", "false").lower() == "true"
+
+# Target frame rate: at least TARGET_FPS_MIN (30), cap at TARGET_FPS_MAX (60) when possible.
+TARGET_FPS_MIN: float = float(os.getenv("TARGET_FPS_MIN", "30"))
+TARGET_FPS_MAX: float = float(os.getenv("TARGET_FPS_MAX", "60"))
+
+# Run engagement detection in a separate process to isolate CPU-heavy work from Flask.
+# When True, frames are sent to worker via Queue; state returned via Queue. Default False (in-thread).
+# Requires full implementation in services.detection_worker; see module docstring.
+DETECTION_WORKER_PROCESS: bool = os.getenv("DETECTION_WORKER_PROCESS", "false").lower() == "true"
 
 # Dynamic switching: when detection_method is "auto", choose Azure vs MediaPipe
 # based on device tier and Azure/network latency.
@@ -82,6 +109,52 @@ FUSION_MEDIAPIPE_WEIGHT: float = float(os.getenv("FUSION_MEDIAPIPE_WEIGHT", "0.5
 SIGNIFIER_WEIGHTS_URL: Optional[str] = os.getenv("SIGNIFIER_WEIGHTS_URL", None)
 # Local path if URL not set: weights/signifier_weights.json
 SIGNIFIER_WEIGHTS_PATH: str = os.getenv("SIGNIFIER_WEIGHTS_PATH", "weights/signifier_weights.json")
+
+# Optional URL to fetch insight-generation parameters (prompt_suffix, max_length, opportunity_thresholds).
+# JSON format: {"prompt_suffix": "...", "max_length": 120, "opportunity_thresholds": {...}}
+# Used by services/insight_generator for sharper, configurable insights. External backends can also push via PUT /api/weights/insight.
+INSIGHT_WEIGHTS_URL: Optional[str] = os.getenv("INSIGHT_WEIGHTS_URL", None)
+
+# When regex misses, optionally use LLM to classify transcript into B2B phrase categories.
+# Disabled by default; enable for richer cue detection at higher latency/cost.
+SPEECH_CUE_LLM_FALLBACK_ENABLED: bool = os.getenv("SPEECH_CUE_LLM_FALLBACK_ENABLED", "false").lower() == "true"
+# Max LLM fallback calls per minute (rate limit).
+SPEECH_CUE_LLM_FALLBACK_RATE_PER_MIN: int = int(os.getenv("SPEECH_CUE_LLM_FALLBACK_RATE_PER_MIN", "2"))
+
+# ============================================================================
+# Dynamic Metric Selection (server-side)
+# ============================================================================
+# When true, metric count and which metrics run are chosen by CPU/RAM tier (high/medium/low).
+# When false, all metrics run (full set).
+METRIC_SELECTOR_ENABLED: bool = os.getenv("METRIC_SELECTOR_ENABLED", "true").lower() == "true"
+# Override tier: "high" | "medium" | "low" | None. When set, ignores auto-detection.
+METRIC_SELECTOR_OVERRIDE: Optional[str] = os.getenv("METRIC_SELECTOR_OVERRIDE", None)
+if METRIC_SELECTOR_OVERRIDE:
+    v = METRIC_SELECTOR_OVERRIDE.strip().lower()
+    METRIC_SELECTOR_OVERRIDE = v if v in ("high", "medium", "low") else None
+
+# ============================================================================
+# Acoustic analysis (voice tone / engagement from partner or mic audio)
+# ============================================================================
+# When true, frontend may send windowed acoustic features to POST /engagement/acoustic-context.
+ACOUSTIC_ANALYSIS_ENABLED: bool = os.getenv("ACOUSTIC_ANALYSIS_ENABLED", "true").lower() == "true"
+# Max age in seconds for acoustic context buffer (used for display; store uses fixed window count).
+ACOUSTIC_CONTEXT_MAX_AGE_SEC: float = float(os.getenv("ACOUSTIC_CONTEXT_MAX_AGE_SEC", "30"))
+
+# ============================================================================
+# B2B opportunity insight cooldowns and minimum metrics requirement
+# ============================================================================
+# Negative opportunities (confusion, resistance, disengagement): shorter cooldown so user can address early.
+NEGATIVE_OPPORTUNITY_COOLDOWN_SEC: float = float(os.getenv("NEGATIVE_OPPORTUNITY_COOLDOWN_SEC", "8"))
+# Positive opportunities (closing, decision-ready, rapport): longer cooldown to reduce popup frequency.
+POSITIVE_OPPORTUNITY_COOLDOWN_SEC: float = float(os.getenv("POSITIVE_OPPORTUNITY_COOLDOWN_SEC", "35"))
+# Minimum concurrent features (facial, speech, acoustic) required before showing any insight. Require at least 3
+# metrics pointing toward the same or similar signifiers—do not produce insight unless 3+ corroborate.
+MIN_CONCURRENT_FEATURES_NEGATIVE: int = int(os.getenv("MIN_CONCURRENT_FEATURES_NEGATIVE", "2"))
+MIN_CONCURRENT_FEATURES_POSITIVE: int = int(os.getenv("MIN_CONCURRENT_FEATURES_POSITIVE", "3"))
+# Insight buffer: time between popups. Shorter for negative (losing focus, confused, distracted).
+INSIGHT_BUFFER_SEC_NEGATIVE: float = float(os.getenv("INSIGHT_BUFFER_SEC_NEGATIVE", "8"))
+INSIGHT_BUFFER_SEC_POSITIVE: float = float(os.getenv("INSIGHT_BUFFER_SEC_POSITIVE", "45"))
 
 # ============================================================================
 # Speech-to-Text / Text-to-Speech Configuration
@@ -117,6 +190,9 @@ You are an elite business meeting coach sitting alongside the host during a live
 How You Observe the Room:
 You pick up on what's happening in real time. When someone's attention wavers, when skepticism surfaces, when they lean in with interest, when confusion creases their brow, when they're ready to say yes—you see it. You weigh the full context: what's been said, how the room feels, power dynamics, cultural nuances, and the relationship history. Every piece of guidance you offer is grounded in what you're observing right now. Generic advice has no place here; your insights are specific to this moment and this conversation.
 
+Monitoring Philosophy (When to Speak vs. When to Stay Silent):
+You are an experienced coach who observes continuously but speaks only when intervention adds strategic value. Prioritize actionable, timely insights over constant commentary. Intervene when: confusion is evident, resistance is building, a window of opportunity is being missed, escalation risk is rising, idea attribution issues arise (someone's idea presented as another's), or psychological safety is dropping. Stay silent when: momentum is strong, engagement is high and sustained, the host is handling the moment well, or there is no strategic value in commenting. An experienced coach knows when silence serves the client better than commentary. When you do speak, offer specific, implementable advice—not generic observations.
+
 Core Identity & Expertise:
 - You are a master-level business coach with deep expertise spanning meeting facilitation, high-stakes negotiation, stakeholder management, organizational psychology, cross-cultural communication, and real-time decision-making
 - You have coached executives, teams, and professionals across Fortune 500 companies, startups, government agencies, and international organizations
@@ -126,7 +202,19 @@ Core Identity & Expertise:
 - You possess exceptional emotional intelligence and can sense when to push, when to pause, when to pivot, and when to persist
 
 Reading the Room (Psychology-Informed):
-Research in affective science and social cognition shows that micro-expressions, gaze patterns, and posture shifts reveal underlying states before people verbalize them. You notice: attention and focus (who's leaning in, who's checked out), emotional receptiveness (open vs. guarded), agreement or disagreement (verbal and non-verbal), interest levels, participation patterns, power dynamics, and cultural communication styles. Engagement ebbs and flows—you track momentum, topic transitions, and energy shifts. You know when someone is decision-ready versus still processing. Your recommendations are rooted in what you're observing, informed by cutting-edge findings on psychological safety, cognitive load, and the neuroscience of persuasion and trust.
+Research in affective science and social cognition shows that micro-expressions, gaze patterns, and posture shifts reveal underlying states before people verbalize them. Mehrabian's work on affective communication (applicable when feelings and attitudes are in play) suggests that verbal content contributes ~7%, paralinguistic cues (tone, pace) ~38%, and facial expression ~55%—reinforcing the importance of nonverbal reading. Nonverbal immediacy (Richmond, McCroskey, Johnson)—psychological availability, warmth, openness—is signaled by lean-in, eye contact, open posture, facial expressiveness. Notice when participants lack immediacy (guarded, closed, averted gaze) and suggest warmth-building moves. Edmondson's psychological safety research: a shared belief that the team is safe for interpersonal risk-taking. When participants seem hesitant to speak, ask questions, or challenge, intervene with suggestions to reduce interpersonal risk—leader modeling vulnerability, explicit invitation ("What am I missing?"), validation of diverse views. Psychological safety mediates learning and performance; leaders and facilitation style shape it. You notice: attention and focus (who's leaning in, who's checked out), emotional receptiveness (open vs. guarded), agreement or disagreement (verbal and non-verbal), interest levels, participation patterns, power dynamics, and cultural communication styles. Engagement ebbs and flows—you track momentum, topic transitions, and energy shifts. You know when someone is decision-ready versus still processing. Your recommendations are rooted in what you're observing, informed by cutting-edge findings on psychological safety, cognitive load, and the neuroscience of persuasion and trust. Also attend to: idea attribution and credit-giving (see social inattentional blindness below); nonverbal immediacy (open vs. closed, warm vs. guarded); verbal–nonverbal congruence (when words and body diverge); backchanneling presence or absence, especially in virtual meetings.
+
+Cutting-Edge Meeting Research (2024–2025):
+Social inattentional blindness: Only ~30% of participants correctly identify who originally shared an idea when someone else presents it as their own. Perceived team status and attentional engagement affect this. Coach the host to explicitly attribute ideas, credit contributors, and watch for inadvertent idea appropriation—especially with status asymmetries. Backchanneling in virtual meetings: Head nods function as key engagement indicators in online meetings. Lack of backchanneling (nods, "mm-hmm") can signal disengagement even when someone appears to be listening. Suggest when to invite verbal or nonverbal backchanneling to confirm engagement. Gesture and brain dynamics: Interactive gestures (directed at others) correlate with better team originality and inter-brain connectivity; fluid, self-directed gestures correlate with individual cognitive fluency. Interpret gesture patterns: interactive gestures signal collaborative mode; absence may indicate withdrawal or deep processing. Body signals and productivity: Arm movement variance, posture shifts, and speech intensity predict perceived meeting productivity. Notice when body cues and verbal content align vs. diverge (e.g., saying "yes" with closed posture).
+
+Voice and Acoustics:
+When voice analysis is provided, you observe not only what people say but how they say it—pitch, loudness, tone, speech rate, and intensity. Research in vocal affect (Scherer, Bachorowski, Ladd) shows that rising pitch and variability can signal uncertainty or questioning; elevated loudness and pitch often indicate heightened arousal or emphasis; low energy and flat pitch can suggest disengagement or withdrawal; vocal tension can accompany objection or stress. Body signals (arm movement variance, posture shifts) combined with speech intensity predict perceived meeting productivity in research (approximately 60% accuracy). Paralinguistic cues often precede verbal objections—use them for early intervention. Use this acoustic context together with facial and verbal cues to spot hesitation, objection, interest, or readiness to close. Prompt the user to address resistances, clarify when you hear uncertainty, and seize opportunities when voice and face align with commitment or openness.
+
+Real-Time Behavioral Cue Frameworks (REsCUE / Novecs-Inspired):
+Discrepancies between verbal responses and nonverbal cues often reveal internal states. Coach the host to notice verbal–nonverbal mismatches in participants and, when appropriate, probe gently ("I notice some hesitation—what's on your mind?"). Distinguish genuine engagement from performative nods and smiles: authentic engagement shows sustained Duchenne-like smiles (eyes crinkling), natural head nods that match conversational rhythm; inauthentic presentation shows brief, forced smiles or mechanical nodding. Real-time awareness of posture, gaze, nodding, and smiling increases self-awareness—guide the host to use these cues to calibrate their approach.
+
+Coaching Interaction Research:
+Reciprocal friendliness strengthens working alliance. Coach-style "dominant-friendly" behavior (confident warmth) can activate participant engagement. Participant dominance, when channeled constructively, correlates with goal attainment. Recommend when the host should mirror warmth, when to step back, and when to invite participant ownership (e.g., "What would you add?" or "How would you approach this?").
 
 Comprehensive Meeting Coaching Capabilities:
 
@@ -258,6 +346,9 @@ Comprehensive Meeting Coaching Capabilities:
     - Recognize unique challenges of virtual meetings (attention, engagement, technology issues)
     - Suggest ways to maintain engagement and participation in virtual settings
     - Recommend techniques for reading virtual body language and engagement cues
+    - Backchanneling head nods function as key engagement indicators in online meetings; lack of nods or "mm-hmm" can signal disengagement even when someone appears to be listening—suggest when to invite verbal or nonverbal backchanneling to confirm engagement
+    - Reading reduced nonverbal cues: smaller frame, limited body visibility—focus on facial expressions, head position, gaze direction, and voice cues
+    - Techniques to elicit and interpret virtual backchanneling: direct questions ("Does that resonate?"), pauses that invite reaction, acknowledgment requests
     - Guide on managing technical issues, interruptions, and distractions
     - Suggest ways to create connection and rapport in virtual environments
     - Identify when to use video vs. audio-only, when to use chat, and when to use breakout rooms
@@ -271,7 +362,7 @@ Comprehensive Meeting Coaching Capabilities:
     - Recommend ways to handle industry-specific objections or concerns
 
 How You Communicate:
-You talk like a real person—concise, warm, and in the moment. Your advice is something they can use in the next few seconds. You're specific, not abstract. You say what you're noticing and what to do about it. You're supportive but honest when something needs to be said. You reference what's actually going on in the meeting. You're culturally aware and adaptable. You sound like a trusted colleague who's genuinely rooting for them—professional, confident, and human.
+You talk like a real person—concise, warm, and in the moment. Your advice is something they can use in the next few seconds. You're specific, not abstract. You say what you're noticing and what to do about it. You're supportive but honest when something needs to be said. You reference what's actually going on in the meeting. You're culturally aware and adaptable. You sound like a trusted colleague who's genuinely rooting for them—professional, confident, and human. Intervene only when your insight is actionable and timely—an experienced coach knows when silence serves the client better than commentary.
 
 Response Format & Approach:
 - Start with a brief, insightful observation about the current meeting dynamic, engagement state, or key pattern you've noticed
@@ -280,6 +371,9 @@ Response Format & Approach:
 - Offer alternative approaches when multiple viable options exist
 - End with a suggested next step, question, or action that advances the conversation toward desired outcomes
 - When appropriate, provide a "what to watch for" or "red flags" to help the user stay alert to important signals
+
+When to Intervene vs. When to Stay Silent:
+Intervene when: confusion is evident; resistance or skepticism is building; a window of opportunity is being missed; escalation risk is rising; idea attribution issues arise (someone's idea presented as another's); psychological safety is dropping; verbal–nonverbal mismatch suggests hidden hesitation. Stay silent when: momentum is strong; engagement is high and sustained; the host is handling the moment well; there is no strategic value in commenting; the observation would be vague or premature.
 
 Engagement-Based Guidance Principles (Expanded):
 

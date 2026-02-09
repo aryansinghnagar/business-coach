@@ -6,6 +6,12 @@ Orchestrates real-time engagement from video: face detection (MediaPipe or Azure
 detection. Alerts (spike / opportunity / aural) are consumed by GET /engagement/state
 and turned into popup + TTS via the insight generator. See docs/DOCUMENTATION.md.
 
+Client retention: We prioritize negative cues (confusion, skepticism, objection, resistance,
+disengagement) with a lower concurrent-feature requirement and shorter cooldown so the user
+can address concerns before the client voices them. Positive cues (closing, decision-ready,
+rapport) use a higher concurrent-feature requirement and longer cooldown to reduce popup
+frequency while still surfacing strong opportunities.
+
 Pipeline: capture frame → update last-frame reference for video feed → optional
 lightweight skip (every 2nd frame) → process frame (detect faces, signifiers, state)
 → update current state and callbacks.
@@ -24,14 +30,21 @@ from utils.video_source_handler import VideoSourceHandler, VideoSourceType
 from utils.engagement_scorer import EngagementScorer, EngagementMetrics
 from utils.context_generator import ContextGenerator, EngagementContext
 from utils.face_detection_interface import FaceDetectorInterface, FaceDetectionResult
-from utils.mediapipe_detector import MediaPipeFaceDetector
 from utils.azure_landmark_mapper import expand_azure_landmarks_to_mediapipe
 from utils.business_meeting_feature_extractor import BusinessMeetingFeatureExtractor
 from utils.expression_signifiers import ExpressionSignifierEngine
 from utils import signifier_weights
 from utils.detection_capability import evaluate_capability, recommend_detection_method
-from utils.b2b_opportunity_detector import detect_opportunity
+from utils.b2b_opportunity_detector import (
+    detect_opportunity,
+    NEGATIVE_OPPORTUNITY_IDS,
+    POSITIVE_OPPORTUNITY_IDS,
+)
+from utils.engagement_composites import compute_composite_metrics
+from utils.metric_selector import get_active_metrics_with_config, MetricConfig
 from services.insight_generator import get_recent_speech_tags
+from services.acoustic_context_store import get_recent_acoustic_tags, get_acoustic_negative_strength
+from services.engagement_request_tracker import is_idle
 
 
 class EngagementLevel(Enum):
@@ -78,6 +91,7 @@ class EngagementState:
     signifier_scores: Optional[dict] = None  # 30 expression signifier scores (0-100 each)
     detection_method: Optional[str] = None  # "mediapipe" | "azure_face_api"
     azure_metrics: Optional[dict] = None  # When Azure: { base, composite, score }; for frontend
+    composite_metrics: Optional[dict] = None  # Facial+speech composites (0-100 each); see utils/engagement_composites
 
 
 class EngagementStateDetector:
@@ -117,7 +131,7 @@ class EngagementStateDetector:
                              frame, and skip 100-feature extractor (for low-power devices).
         """
         self.lightweight_mode = bool(lightweight_mode)
-        default_conf = getattr(config, "MIN_FACE_CONFIDENCE", 0.05)
+        default_conf = config.MIN_FACE_CONFIDENCE
         self._min_face_confidence = max(0.01, min(0.9, float(min_face_confidence or default_conf)))
         if self.lightweight_mode:
             detection_method = "mediapipe"
@@ -127,7 +141,7 @@ class EngagementStateDetector:
 
         # Resolve "auto" to mediapipe or azure_face_api based on device + network
         self._effective_method: Optional[str] = None
-        if (detection_method or "").lower() == "auto" and getattr(config, "AUTO_DETECTION_SWITCHING", True):
+        if (detection_method or "").lower() == "auto" and config.AUTO_DETECTION_SWITCHING:
             try:
                 _tier, recommended, _latency_ms, reason = evaluate_capability()
                 detection_method = recommended
@@ -149,6 +163,7 @@ class EngagementStateDetector:
         if (detection_method or "").lower() == "unified":
             from utils.azure_face_detector import AzureFaceAPIDetector
             from utils.azure_engagement_metrics import get_all_azure_metrics, get_azure_score_breakdown
+            from utils.mediapipe_detector import MediaPipeFaceDetector
             self._get_all_azure_metrics = get_all_azure_metrics
             self._get_azure_score_breakdown = get_azure_score_breakdown
             self.face_detector = MediaPipeFaceDetector(min_detection_confidence=self._min_face_confidence)
@@ -171,15 +186,24 @@ class EngagementStateDetector:
                 self.face_detector = AzureFaceAPIDetector()
                 if not self.face_detector.is_available():
                     print("Warning: Azure Face API not available, falling back to MediaPipe")
+                    from utils.mediapipe_detector import MediaPipeFaceDetector
                     self.face_detector = MediaPipeFaceDetector(min_detection_confidence=self._min_face_confidence)
             except Exception as e:
                 print(f"Warning: Failed to initialize Azure Face API: {e}. Falling back to MediaPipe")
+                from utils.mediapipe_detector import MediaPipeFaceDetector
                 self.face_detector = MediaPipeFaceDetector(min_detection_confidence=self._min_face_confidence)
             self.detection_method = self.face_detector.get_name()
         else:
+            from utils.mediapipe_detector import MediaPipeFaceDetector
             self.face_detector = MediaPipeFaceDetector(min_detection_confidence=self._min_face_confidence)
             self.detection_method = self.face_detector.get_name()
         
+        # Metric config for dynamic selection (tiers: high/medium/low)
+        try:
+            self._metric_config: Optional[MetricConfig] = get_active_metrics_with_config()
+        except Exception:
+            self._metric_config = None  # Fallback: no filtering
+
         # Component initialization
         self.video_handler = VideoSourceHandler()
         self.scorer = EngagementScorer()
@@ -196,9 +220,11 @@ class EngagementStateDetector:
         self.score_history: deque = deque(maxlen=3)
         self.metrics_history: deque = deque(maxlen=3)
         
-        # Track consecutive frames without face
+        # Track consecutive frames without face (FPS-aware: ~1s at 60 fps, ~2s at 30 fps)
         self.consecutive_no_face_frames = 0
-        self.max_no_face_frames = 30  # Reset after ~1 second at 30 FPS
+        self._target_fps_min = max(15, float(config.TARGET_FPS_MIN))
+        self._target_fps_max = max(30, float(config.TARGET_FPS_MAX))
+        self.max_no_face_frames = int(self._target_fps_max)
         
         # Spike detection per group (G1..G4): short window, cooldown per group
         self._group_history: dict = {k: deque(maxlen=12) for k in ("g1", "g2", "g3", "g4")}
@@ -224,14 +250,15 @@ class EngagementStateDetector:
         self._pending_alert: Optional[dict] = None
         self._frame_count: int = 0
         self._last_composite_100_time: float = 0.0
-        self._composite_100_cooldown_sec: float = 10.0
-        # Global buffer between insight popups (any type) to avoid overwhelming user
+        self._composite_100_cooldown_sec: float = 22.0  # Positive-only; reduce frequency
         self._last_insight_popup_time: float = 0.0
-        self._insight_buffer_sec: float = 28.0  # 24–30s range; research: spacing reduces overload
-        # Require at least this many concurrent features before showing an insight popup
-        self._min_concurrent_features: int = 2
+        # Retention: shorter buffer for negative (losing focus, confused, distracted); longer for positive
+        self._insight_buffer_sec_negative: float = float(config.INSIGHT_BUFFER_SEC_NEGATIVE)
+        self._insight_buffer_sec_positive: float = float(config.INSIGHT_BUFFER_SEC_POSITIVE)
+        self._min_concurrent_features_negative: int = int(config.MIN_CONCURRENT_FEATURES_NEGATIVE)
+        self._min_concurrent_features_positive: int = int(config.MIN_CONCURRENT_FEATURES_POSITIVE)
         
-        # Stock messages for metric group spikes (B2B meeting context; overwritten by insight_generator when OpenAI succeeds)
+        # Stock messages for metric group spikes (B2B meeting context; overwritten by insight_generator when Azure AI Foundry succeeds)
         self._SPIKE_MESSAGES: dict = {
             "g1": "They're showing stronger interest—good moment to deepen the value proposition or ask for their view.",
             "g2": "They look like they're thinking hard—consider pausing or clarifying to avoid overload before your next ask.",
@@ -242,6 +269,10 @@ class EngagementStateDetector:
         # Last frame for video-feed streaming (thread-safe)
         self._last_frame: Optional[np.ndarray] = None
         self._last_frame_lock = threading.Lock()
+
+        # Adaptive frame rate: when score is stable, process every 2nd frame to save CPU
+        self._adaptive_score_history: deque = deque(maxlen=10)
+        self._adaptive_stable: bool = False
 
     def get_last_frame_jpeg(self) -> Optional[bytes]:
         """
@@ -349,7 +380,7 @@ class EngagementStateDetector:
     
     def get_fps(self) -> float:
         """
-        Get the current processing FPS.
+        Get the current processing FPS (target 30–60).
         
         Returns:
             float: Average FPS over last 30 frames
@@ -374,7 +405,7 @@ class EngagementStateDetector:
                     # No frame available, wait a bit and continue
                     # But track this to detect if video source is stuck
                     self.consecutive_no_face_frames += 1
-                    if self.consecutive_no_face_frames > 60:  # ~2 seconds at 30 FPS
+                    if self.consecutive_no_face_frames > int(self._target_fps_max * 2):  # ~2s regardless of FPS
                         print("Warning: Video source not providing frames, checking connection...")
                         # Try to reinitialize if possible
                         if self.video_handler.source_type == VideoSourceType.WEBCAM:
@@ -384,24 +415,49 @@ class EngagementStateDetector:
                                 lightweight=self.lightweight_mode,
                             )
                         self.consecutive_no_face_frames = 0
-                    time.sleep(0.033)  # ~30 FPS
+                    time.sleep(1.0 / self._target_fps_min)
                     continue
 
-                # Store reference for video feed; copy happens only when client requests JPEG (reduces memory bandwidth).
                 with self._last_frame_lock:
                     self._last_frame = frame
 
-                # Lightweight: process every 2nd frame to halve CPU
-                if self.lightweight_mode:
+                current_fps = self.get_fps()
+                self.signifier_engine.set_fps(
+                    min(self._target_fps_max, max(self._target_fps_min, current_fps)) if current_fps > 0 else self._target_fps_min
+                )
+
+                if self.lightweight_mode and current_fps >= self._target_fps_min:
                     self._frame_count += 1
                     if self._frame_count % 2 != 0:
-                        time.sleep(0.016)
+                        time.sleep(1.0 / self._target_fps_max)
+                        continue
+
+                if is_idle(60.0):
+                    self._frame_count += 1
+                    if self._frame_count % 4 != 0:
+                        time.sleep(1.0 / self._target_fps_min)
+                        continue
+
+                if self._adaptive_stable and not self.lightweight_mode and current_fps >= self._target_fps_min:
+                    self._frame_count += 1
+                    if self._frame_count % 2 != 0:
+                        time.sleep(1.0 / self._target_fps_max)
                         continue
 
                 # Process frame and update state
                 state = self._process_frame(frame)
                 
                 if state:
+                    # Update adaptive throttle based on score stability
+                    self._adaptive_score_history.append(state.score)
+                    if len(self._adaptive_score_history) >= 6:
+                        recent = list(self._adaptive_score_history)
+                        span = max(recent) - min(recent)
+                        mean_sc = sum(recent) / len(recent)
+                        if span < 6:
+                            self._adaptive_stable = True
+                        elif abs(state.score - mean_sc) > 8:
+                            self._adaptive_stable = False
                     with self.lock:
                         self.current_state = state
                     
@@ -412,12 +468,14 @@ class EngagementStateDetector:
                         except Exception as e:
                             print(f"Error in update callback: {e}")
                 
-                # Track FPS
                 current_time = time.time()
                 frame_time = current_time - self.last_frame_time
                 self.last_frame_time = current_time
                 if frame_time > 0:
                     self.fps_counter.append(1.0 / frame_time)
+                frame_budget = 1.0 / self._target_fps_max
+                if frame_time < frame_budget and frame_time > 0:
+                    time.sleep(frame_budget - frame_time)
                 
             except Exception as e:
                 print(f"Error in detection loop: {e}")
@@ -457,6 +515,7 @@ class EngagementStateDetector:
                         "Info: Azure Face API produced repeated empty results; "
                         "switching to MediaPipe for face detection."
                     )
+                    from utils.mediapipe_detector import MediaPipeFaceDetector
                     self.face_detector = MediaPipeFaceDetector(
                         min_detection_confidence=self._min_face_confidence
                     )
@@ -482,6 +541,8 @@ class EngagementStateDetector:
         is_unified = self.detection_method == "unified"
         azure_result = None
         signifier_scores = None
+        composite_metrics = None
+        acoustic_tags: List[str] = []
 
         if is_unified:
             # Unified: MediaPipe primary (landmarks + signifiers) + optional Azure (emotions); fuse scores
@@ -502,9 +563,22 @@ class EngagementStateDetector:
                 signifier_scores=signifier_scores,
             )
             self._check_spike_alerts(group_means, now)
+            speech_tags = get_recent_speech_tags(12)
+            acoustic_tags = get_recent_acoustic_tags()
+            acoustic_tags_filtered = [t for t in acoustic_tags if not self._metric_config or t in self._metric_config.acoustic_tags]
+            acoustic_neg = get_acoustic_negative_strength()
+            composite_metrics_raw = compute_composite_metrics(
+                group_means, signifier_scores, speech_tags,
+                acoustic_tags=acoustic_tags_filtered,
+                acoustic_negative_strength=acoustic_neg,
+            )
+            composite_keys = self._metric_config.composite_keys if self._metric_config else None
+            composite_metrics = {k: v for k, v in composite_metrics_raw.items() if not composite_keys or k in composite_keys}
             self._check_opportunity_alerts(
                 group_means, signifier_scores, now,
                 composite_score=mediapipe_score,
+                composite_metrics=composite_metrics,
+                acoustic_tags=acoustic_tags,
             )
             azure_score = None
             if getattr(self, "_azure_detector_secondary", None) and self._get_all_azure_metrics:
@@ -556,9 +630,22 @@ class EngagementStateDetector:
                 signifier_scores=signifier_scores,
             )
             self._check_spike_alerts(group_means, now)
+            speech_tags = get_recent_speech_tags(12)
+            acoustic_tags = get_recent_acoustic_tags()
+            acoustic_tags_filtered = [t for t in acoustic_tags if not self._metric_config or t in self._metric_config.acoustic_tags]
+            acoustic_neg = get_acoustic_negative_strength()
+            composite_metrics_raw = compute_composite_metrics(
+                group_means, signifier_scores, speech_tags,
+                acoustic_tags=acoustic_tags_filtered,
+                acoustic_negative_strength=acoustic_neg,
+            )
+            composite_keys = self._metric_config.composite_keys if self._metric_config else None
+            composite_metrics = {k: v for k, v in composite_metrics_raw.items() if not composite_keys or k in composite_keys}
             self._check_opportunity_alerts(
                 group_means, signifier_scores, now,
                 composite_score=composite_score,
+                composite_metrics=composite_metrics,
+                acoustic_tags=acoustic_tags,
             )
 
         if not np.isfinite(score) or score < 0 or score > 100:
@@ -580,12 +667,20 @@ class EngagementStateDetector:
         context = self.context_generator.generate_context(
             raw_score,
             metrics,
-            level
+            level,
+            composite_metrics=composite_metrics,
+            acoustic_tags=acoustic_tags,
         )
         
         # Confidence from recent score variance (no smoothing of score itself)
         confidence = self._calculate_confidence()
         
+        # Filter signifier_scores to active metric config (dynamic selection)
+        signifier_scores_filtered = None
+        if signifier_scores and self._metric_config:
+            active_keys = set(self._metric_config.signifier_keys)
+            signifier_scores_filtered = {k: v for k, v in signifier_scores.items() if k in active_keys}
+
         return EngagementState(
             score=float(raw_score),
             level=level,
@@ -594,9 +689,10 @@ class EngagementStateDetector:
             timestamp=time.time(),
             face_detected=True,
             confidence=confidence,
-            signifier_scores=signifier_scores,
+            signifier_scores=signifier_scores_filtered or signifier_scores,
             detection_method=self.detection_method,
             azure_metrics=azure_result if (is_azure or is_unified) else None,
+            composite_metrics=composite_metrics,
         )
     
     def _metrics_from_signifiers(self, s: dict) -> EngagementMetrics:
@@ -649,27 +745,29 @@ class EngagementStateDetector:
         signifier_scores: Optional[dict],
         has_recent_speech: bool,
         include_speech: bool = True,
+        composite_metrics: Optional[dict] = None,
     ) -> int:
         """
-        Count how many "concurrent features" are active in the current frame.
-        Used to require multiple features simultaneously before showing an insight popup.
+        Count how many "concurrent features" are active. Used to require multiple
+        features before showing a positive insight popup.
         """
         count = 0
-        # Group means above threshold (G3 = low resistance, so high is good)
         for gkey in ("g1", "g2", "g3", "g4"):
             if group_means.get(gkey, 0.0) >= 55.0:
                 count += 1
-        # Composite engagement elevated
         if composite_score >= 60.0:
             count += 1
-        # At least 2 signifiers in "detected" (100) state
         if signifier_scores:
-            detected = sum(1 for v in signifier_scores.values() if float(v) == 100.0)
+            detected = sum(1 for v in signifier_scores.values() if float(v) >= 65.0)
             if detected >= 2:
                 count += 1
-        # Recent speech/trigger phrase (aural)
         if include_speech and has_recent_speech:
             count += 1
+        if composite_metrics:
+            if composite_metrics.get("decision_readiness_multimodal", 0) >= 60:
+                count += 1
+            elif composite_metrics.get("verbal_nonverbal_alignment", 0) >= 60:
+                count += 1
         return count
 
     def _check_composite_at_100(
@@ -681,8 +779,8 @@ class EngagementStateDetector:
         has_recent_speech: Optional[bool] = None,
     ) -> None:
         """
-        When composite metrics relevant to business meetings hit 100, trigger popup + speech
-        only if at least _min_concurrent_features are active (multi-feature gate).
+        When composite metrics reach very high engagement (g1/g4/composite >= 92), trigger
+        popup only if at least _min_concurrent_features_positive are active (reduce frequency).
         """
         if has_recent_speech is None:
             has_recent_speech = len(get_recent_speech_tags(12)) > 0
@@ -695,20 +793,20 @@ class EngagementStateDetector:
             g4 = group_means.get("g4", 0.0)
             triggered = False
             group_hit = ""
-            if g1 >= 90.0:
+            if g1 >= 92.0:
                 triggered = True
                 group_hit = "g1"
-            elif g4 >= 90.0:
+            elif g4 >= 92.0:
                 triggered = True
                 group_hit = "g4"
-            elif composite_score >= 90.0:
+            elif composite_score >= 92.0:
                 triggered = True
                 group_hit = "composite"
             if triggered:
                 n = self._count_concurrent_features(
                     group_means, composite_score, signifier_scores, has_recent_speech
                 )
-                if n < self._min_concurrent_features:
+                if n < self._min_concurrent_features_positive:
                     return
                 self._last_composite_100_time = now
                 self._pending_alert = {
@@ -756,10 +854,12 @@ class EngagementStateDetector:
         signifier_scores: Optional[dict],
         now: float,
         composite_score: float = 0.0,
+        composite_metrics: Optional[dict] = None,
+        acoustic_tags: Optional[List[str]] = None,
     ) -> None:
         """
-        Detect B2B opportunity features (e.g. closing window, cognitive overload, skepticism).
-        Set _pending_alert only if at least _min_concurrent_features are active (multi-feature gate).
+        Detect B2B opportunity features. Negative require 1 concurrent feature;
+        positive require 4 (multiple positive signals only).
         """
         speech_tags = get_recent_speech_tags(12)
         has_recent_speech = len(speech_tags) > 0
@@ -772,14 +872,22 @@ class EngagementStateDetector:
                 signifier_scores=signifier_scores,
                 now=now,
                 recent_speech_tags=speech_tags,
+                composite_metrics=composite_metrics,
+                acoustic_tags=acoustic_tags,
             )
             if result is not None:
-                n = self._count_concurrent_features(
-                    group_means, composite_score, signifier_scores, has_recent_speech
-                )
-                if n < self._min_concurrent_features:
-                    return
                 oid, context = result
+                min_required = (
+                    self._min_concurrent_features_negative
+                    if oid in NEGATIVE_OPPORTUNITY_IDS
+                    else self._min_concurrent_features_positive
+                )
+                n = self._count_concurrent_features(
+                    group_means, composite_score, signifier_scores, has_recent_speech,
+                    composite_metrics=composite_metrics,
+                )
+                if n < min_required:
+                    return
                 self._pending_alert = {
                     "type": "opportunity",
                     "opportunity_id": oid,
@@ -797,11 +905,30 @@ class EngagementStateDetector:
         with self.lock:
             self._pending_alert = None
     
-    def can_show_insight(self) -> bool:
-        """True if enough time has passed since last insight popup."""
-        return (time.time() - self._last_insight_popup_time) >= self._insight_buffer_sec
-    
-    def record_insight_shown(self) -> None:
+    def can_show_insight(self, alert: Optional[dict] = None) -> bool:
+        """
+        True if enough time has passed since last insight popup.
+        Uses shorter buffer for negative alerts (retention), longer for positive.
+        If alert is None, uses the more permissive (negative) buffer.
+        """
+        elapsed = time.time() - self._last_insight_popup_time
+        is_positive = self._is_positive_alert(alert)
+        buffer = self._insight_buffer_sec_positive if is_positive else self._insight_buffer_sec_negative
+        return elapsed >= buffer
+
+    def _is_positive_alert(self, alert: Optional[dict]) -> bool:
+        """True if alert is positive (spike/composite_100 or positive opportunity)."""
+        if alert is None:
+            return False
+        if alert.get("type") in ("spike", "composite_100"):
+            return True
+        if alert.get("type") == "opportunity":
+            oid = alert.get("opportunity_id") or ""
+            return oid in POSITIVE_OPPORTUNITY_IDS
+        # Aural (phrase-triggered) = treat as negative for buffer (shorter cooldown)
+        return False
+
+    def record_insight_shown(self, alert: Optional[dict] = None) -> None:
         """Call when an insight popup was shown (any type)."""
         self._last_insight_popup_time = time.time()
 

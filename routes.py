@@ -7,10 +7,11 @@ See docs/DOCUMENTATION.md for API reference.
 """
 
 from flask import Blueprint, request, jsonify, send_from_directory, Response
-from services.azure_openai import openai_service
+from services.azure_foundry import get_foundry_service
 from services.insight_generator import (
     append_speech_tag,
     append_transcript,
+    check_speech_cues,
     clear_pending_aural_alert,
     clear_recent_speech_tags,
     clear_transcript,
@@ -18,18 +19,26 @@ from services.insight_generator import (
     generate_insight_for_opportunity,
     generate_insight_for_spike,
     get_and_clear_pending_aural_alert,
+    get_discourse_boost,
+    get_insight_weights,
     get_pending_aural_alert,
+    get_recent_speech_tags,
     get_recent_transcript,
-    _check_for_trigger_phrases,
+    set_insight_weights,
     _set_pending_aural_alert,
 )
-from utils.azure_engagement_metrics import binarize_metrics
+from services.acoustic_context_store import (
+    append_acoustic_windows,
+    clear_acoustic_context,
+    get_recent_acoustic_context,
+    get_recent_acoustic_tags,
+)
+from services.engagement_request_tracker import update_last_request
 from utils.b2b_opportunity_detector import clear_opportunity_state
-from services.azure_speech import speech_service
+from services.azure_speech import get_speech_service
 from utils.helpers import build_config_response
 from utils.face_detection_preference import get_face_detection_method, set_face_detection_method
-from engagement_state_detector import EngagementStateDetector, EngagementLevel, VideoSourceType
-from utils.video_source_handler import set_partner_frame_from_bytes
+from utils.video_source_handler import set_partner_frame_from_bytes, VideoSourceType
 from utils.context_generator import ContextGenerator
 from utils import signifier_weights
 from typing import Optional
@@ -41,10 +50,205 @@ import config
 # Create a blueprint for better organization
 api = Blueprint('api', __name__)
 
-# Global engagement detector instance (singleton pattern)
-# Initialized on first use to avoid import-time initialization
-engagement_detector: Optional[EngagementStateDetector] = None
-context_generator = ContextGenerator()
+# #region agent log
+def _debug_log(data):
+    try:
+        import json as _j
+        import os as _os
+        _d = _os.path.dirname(_os.path.abspath(__file__))
+        _p = _os.path.join(_d, ".cursor", "debug.log")
+        _os.makedirs(_os.path.dirname(_p), exist_ok=True)
+        with open(_p, "a") as f:
+            f.write(_j.dumps(dict(data, timestamp=int(time.time() * 1000))) + "\n")
+    except Exception:
+        pass
+# #endregion
+
+# Global engagement detector instance (singleton).
+# EngagementStateDetector is imported lazily in start_engagement to defer loading heavy deps (mediapipe, cv2, etc.).
+engagement_detector = None  # type: Optional["EngagementStateDetector"]
+
+# Lazy context generator: created on first use (used for context-push and chat)
+_context_generator: Optional[ContextGenerator] = None
+
+
+def _get_context_generator() -> ContextGenerator:
+    """Return the context generator instance, creating it on first call (lazy init)."""
+    global _context_generator
+    if _context_generator is None:
+        _context_generator = ContextGenerator()
+    return _context_generator
+
+# In-memory store for last context sent to Azure AI Foundry and last AI response (sidebar/dashboard)
+engagement_context_store = {
+    "last_context_sent": None,
+    "last_response": None,
+    "last_response_timestamp": None,
+    "pending_user_context": None,  # User-defined context from dashboard; appended to next batch sent to Foundry
+}
+
+
+def _build_engagement_context_bundle(additional_context: Optional[str] = None) -> str:
+    """
+    Build the sectioned context bundle for Azure AI Foundry. Always produces a string:
+    when no face/state, uses no-face context; otherwise uses current state context.
+    If no additional_context is provided, any pending user context (set via dashboard)
+    is used and cleared so it is appended to this batch only.
+    """
+    effective_additional = additional_context
+    if not (effective_additional and isinstance(effective_additional, str) and effective_additional.strip()):
+        effective_additional = engagement_context_store.pop("pending_user_context", None)
+    state = None
+    if engagement_detector:
+        try:
+            state = engagement_detector.get_current_state()
+        except Exception:
+            pass
+    cg = _get_context_generator()
+    if not state or not state.face_detected:
+        ctx = cg.generate_context_no_face()
+    else:
+        ctx = state.context
+    acoustic_summary = get_recent_acoustic_context() or ""
+    acoustic_tags = get_recent_acoustic_tags() or []
+    return cg.build_context_bundle_for_foundry(
+        ctx,
+        acoustic_summary=acoustic_summary,
+        acoustic_tags=acoustic_tags,
+        additional_context=effective_additional,
+        persistently_low_line=None,
+    )
+
+
+# Human-readable labels for signifiers (for fresh insight context)
+_SIGNIFIER_LABELS = {
+    "g1_duchenne": "Duchenne smile", "g1_pupil_dilation": "Pupil dilation", "g1_eyebrow_flash": "Eyebrow flash",
+    "g1_eye_contact": "Eye contact", "g1_head_tilt": "Head tilt", "g1_forward_lean": "Forward lean",
+    "g2_look_up_lr": "Look up", "g2_lip_pucker": "Lip pucker", "g2_eye_squint": "Eye squint",
+    "g2_thinking_brow": "Thinking brow", "g2_stillness": "Stillness", "g2_lowered_brow": "Lowered brow",
+    "g3_contempt": "Contempt", "g3_lip_compression": "Lip compression", "g3_gaze_aversion": "Gaze aversion",
+    "g3_jaw_clench": "Jaw clench", "g3_rapid_blink": "Rapid blinking", "g4_relaxed_exhale": "Relaxed exhale",
+    "g4_fixed_gaze": "Fixed gaze", "g4_smile_transition": "Smile transition",
+}
+_COMPOSITE_LABELS = {
+    "cognitive_load_multimodal": "Cognitive load", "rapport_engagement": "Rapport",
+    "skepticism_objection_strength": "Skepticism", "disengagement_risk_multimodal": "Disengagement risk",
+    "decision_readiness_multimodal": "Decision readiness",
+}
+_ACOUSTIC_LABELS = {
+    "acoustic_uncertainty": "Voice uncertainty", "acoustic_tension": "Vocal tension",
+    "acoustic_disengagement_risk": "Vocal disengagement",
+}
+
+
+def _build_fresh_insight_context(
+    state,
+    signifier_scores: dict,
+    composite_metrics: dict,
+    metrics_summary: dict,
+    recent_speech_tags: list,
+    acoustic_tags_list: list,
+) -> str:
+    """
+    Compile all current context into a single, real-time bundle for insight generation.
+
+    Ensures each insight is customized to the CURRENT engagement state by gathering
+    fresh data from: facial signifiers, composite metrics, speech cues, acoustic
+    features, recent transcript, and user-provided context. Called at the moment
+    of insight generation—never uses stale or cached context.
+    """
+    sections = []
+    cg = _get_context_generator()
+
+    # 1. Meeting engagement state (from current state)
+    if state and state.face_detected:
+        ctx = state.context
+        sections.append(
+            "[CURRENT ENGAGEMENT STATE]\n"
+            f"Score: {float(state.score):.0f}/100 | Level: {state.level.name if state.level else 'UNKNOWN'}\n"
+            f"Summary: {ctx.summary}\n"
+            f"Key indicators: {'; '.join(ctx.key_indicators[:5])}\n"
+            f"Suggested actions: {'; '.join(ctx.suggested_actions[:3])}\n"
+            f"Risks: {'; '.join(ctx.risk_factors[:3]) if ctx.risk_factors else 'None'}\n"
+            f"Opportunities: {'; '.join(ctx.opportunities[:3]) if ctx.opportunities else 'None'}\n"
+            "[/CURRENT ENGAGEMENT STATE]"
+        )
+    else:
+        sections.append(
+            "[CURRENT ENGAGEMENT STATE]\n"
+            "No face detected. Assume neutral engagement.\n"
+            "[/CURRENT ENGAGEMENT STATE]"
+        )
+
+    # 2. Basic metrics (current)
+    if metrics_summary:
+        attn = metrics_summary.get("attention")
+        eye = metrics_summary.get("eyeContact")
+        expr = metrics_summary.get("facialExpressiveness")
+        cues = []
+        if attn is not None:
+            cues.append(f"attention={attn:.0f}")
+        if eye is not None:
+            cues.append(f"eye_contact={eye:.0f}")
+        if expr is not None:
+            cues.append(f"expressiveness={expr:.0f}")
+        if cues:
+            sections.append(f"[BASIC METRICS]\n{', '.join(cues)}\n[/BASIC METRICS]")
+
+    # 3. Elevated facial signifiers (current)
+    if signifier_scores:
+        elevated = [(k, v) for k, v in signifier_scores.items() if isinstance(v, (int, float)) and float(v) >= 50]
+        elevated.sort(key=lambda x: -float(x[1]))
+        if elevated:
+            items = [f"{_SIGNIFIER_LABELS.get(k, k)}={int(v)}" for k, v in elevated[:10]]
+            sections.append(f"[ELEVATED FACIAL SIGNIFIERS]\n{'; '.join(items)}\n[/ELEVATED FACIAL SIGNIFIERS]")
+
+    # 4. Composite metrics (current)
+    if composite_metrics:
+        notable = [(k, v) for k, v in composite_metrics.items() if isinstance(v, (int, float)) and 40 <= float(v) <= 100]
+        notable.sort(key=lambda x: -abs(float(x[1]) - 50))
+        if notable:
+            items = [f"{_COMPOSITE_LABELS.get(k, k)}={int(v)}" for k, v in notable[:6]]
+            sections.append(f"[COMPOSITE SIGNALS]\n{'; '.join(items)}\n[/COMPOSITE SIGNALS]")
+
+    # 5. Recent speech cues (last ~12 sec)
+    if recent_speech_tags:
+        recent = [f"{t.get('category', '')}: \"{t.get('phrase', '')}\"" for t in recent_speech_tags[-5:] if t.get("category")]
+        if recent:
+            sections.append(f"[RECENT SPEECH CUES]\n{'; '.join(recent)}\n[/RECENT SPEECH CUES]")
+
+    # 6. Acoustic / voice analysis
+    acoustic_summary = get_recent_acoustic_context() or ""
+    if acoustic_tags_list or acoustic_summary:
+        voice_parts = []
+        if acoustic_summary:
+            voice_parts.append(acoustic_summary)
+        if acoustic_tags_list:
+            labels = [_ACOUSTIC_LABELS.get(t, t) for t in acoustic_tags_list[:5]]
+            voice_parts.append("Tags: " + ", ".join(labels))
+        sections.append(f"[VOICE / ACOUSTIC]\n{' '.join(voice_parts)}\n[/VOICE / ACOUSTIC]")
+
+    # 7. Recent transcript (what partner said)
+    transcript = get_recent_transcript()
+    if transcript and transcript.strip():
+        snippet = transcript[-600:] if len(transcript) > 600 else transcript
+        sections.append(f"[RECENT TRANSCRIPT]\n{snippet.strip()}\n[/RECENT TRANSCRIPT]")
+
+    # 8. User-provided context (from dashboard; e.g. meeting goals, agenda)
+    user_ctx = engagement_context_store.get("pending_user_context")
+    if user_ctx and isinstance(user_ctx, str) and user_ctx.strip():
+        lines = user_ctx.strip().split("\n")[:15]
+        sections.append(f"[USER-PROVIDED CONTEXT]\n" + "\n".join(lines) + "\n[/USER-PROVIDED CONTEXT]")
+
+    sections.append(
+        "[CRITICAL]\n"
+        "This context was captured RIGHT NOW. The partner's emotional state and cues may have just changed. "
+        "Generate an insight that is SPECIFIC to these exact signals—reference the actual metrics, signifiers, "
+        "speech, or voice cues above. Do NOT return a generic or repeated message.\n"
+        "[/CRITICAL]"
+    )
+
+    return "\n\n".join(sections)
 
 
 # ============================================================================
@@ -63,6 +267,18 @@ def index():
         return send_from_directory(".", "index.html")
     except FileNotFoundError:
         return jsonify({"error": "index.html not found"}), 404
+
+
+@api.route("/dashboard")
+def dashboard():
+    """
+    Serve the real-time dashboard page (metrics, context, AI responses).
+    Open in a new window from the main app via "Open dashboard" link.
+    """
+    try:
+        return send_from_directory("static", "dashboard.html")
+    except FileNotFoundError:
+        return jsonify({"error": "dashboard.html not found"}), 404
 
 
 @api.route("/static/<path:filename>")
@@ -127,7 +343,7 @@ def chat():
         messages = [
             {"role": "user", "content": user_input}
         ]
-        response_text = openai_service.chat_completion(
+        response_text = get_foundry_service().chat_completion(
             messages=messages,
             system_prompt=config.SYSTEM_PROMPT
         )
@@ -172,27 +388,23 @@ def chat_stream():
     if not messages:
         return jsonify({"error": "Missing messages"}), 400
     
-    # Real-time engagement context (no smoothing) for actionable avatar insights
-    if include_engagement and engagement_detector:
+    # Build engagement context when requested; uses any pending user context from dashboard (use-once)
+    if include_engagement:
         try:
-            state = engagement_detector.get_current_state()
-            if state and state.face_detected:
-                engagement_context = context_generator.format_for_ai(state.context)
-                if messages and messages[-1].get("role") == "user":
-                    content = messages[-1].get("content")
-                    # Only prepend to string content so we don't corrupt multimodal (array) messages
-                    if isinstance(content, str):
-                        engagement_msg = f"[MEETING CONTEXT]\n{engagement_context}\n[/MEETING CONTEXT]\n\n"
-                        messages[-1]["content"] = engagement_msg + content
+            full_context = _build_engagement_context_bundle(None)
+            if messages and messages[-1].get("role") == "user":
+                content = messages[-1].get("content")
+                if isinstance(content, str):
+                    engagement_context_store["last_context_sent"] = full_context
+                    messages[-1]["content"] = full_context + "\n\n" + content
         except Exception as e:
-            # If engagement context fails, continue without it
             print(f"Warning: Could not include engagement context: {e}")
     
     try:
         def generate():
             """Generator function for streaming responses."""
             try:
-                for chunk in openai_service.stream_chat_completion(
+                for chunk in get_foundry_service().stream_chat_completion(
                     messages=messages,
                     enable_oyd=enable_oyd,
                     system_prompt=system_prompt
@@ -232,7 +444,7 @@ def get_speech_token():
         }
     """
     try:
-        token_data = speech_service.get_speech_token()
+        token_data = get_speech_service().get_speech_token()
         return jsonify(token_data)
     except Exception as e:
         error_details = str(e)
@@ -265,20 +477,22 @@ def get_speech_config():
 
 
 @api.route("/config/openai", methods=["GET"])
-def get_openai_config():
+@api.route("/config/foundry", methods=["GET"])
+def get_foundry_config():
     """
-    Get OpenAI configuration (endpoint and deployment only, key stays on backend).
+    Get Azure AI Foundry configuration (endpoint and deployment only, key stays on backend).
+    /config/openai kept for backward compatibility.
     
     Returns:
         JSON: {
-            "endpoint": "Azure OpenAI endpoint",
+            "endpoint": "Azure AI Foundry endpoint",
             "deploymentName": "Deployment name",
             "apiVersion": "API version"
         }
     """
     return jsonify({
-        "endpoint": config.AZURE_OPENAI_ENDPOINT,
-        "deploymentName": config.DEPLOYMENT_NAME,
+        "endpoint": config.AZURE_FOUNDRY_ENDPOINT,
+        "deploymentName": config.FOUNDRY_DEPLOYMENT_NAME,
         "apiVersion": "2023-06-01-preview"
     })
 
@@ -441,6 +655,28 @@ def signifier_weights_route():
     return jsonify({"error": "Method not allowed"}), 405
 
 
+@api.route("/weights/insight", methods=["GET", "PUT"])
+def insight_weights_route():
+    """
+    GET: Return current insight weights (prompt_suffix, max_length, opportunity_thresholds).
+    PUT: Update from external backend. Body: {"prompt_suffix": "...", "max_length": 120, "opportunity_thresholds": {...}}. Partial update.
+    """
+    if request.method == "GET":
+        try:
+            return jsonify(get_insight_weights())
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    if request.method == "PUT":
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        data = request.get_json(silent=True) or {}
+        try:
+            return jsonify(set_insight_weights(data))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"error": "Method not allowed"}), 405
+
+
 # ============================================================================
 # Avatar Routes (for audio output)
 # ============================================================================
@@ -456,7 +692,7 @@ def get_avatar_relay_token():
         JSON: Dictionary containing relay token information (Urls, Username, Password)
     """
     try:
-        relay_data = speech_service.get_avatar_relay_token()
+        relay_data = get_speech_service().get_avatar_relay_token()
         return jsonify(relay_data)
     except Exception as e:
         return jsonify({
@@ -489,6 +725,8 @@ def start_engagement_detection():
         }
     """
     global engagement_detector
+    # Lazy import: defer loading engagement_state_detector (mediapipe, cv2, numpy, etc.) until first start
+    from engagement_state_detector import EngagementStateDetector
     
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -497,7 +735,7 @@ def start_engagement_detection():
     source_type_str = data.get("sourceType", "webcam").lower()
     source_path = data.get("sourcePath")
     # App always chooses optimal method (auto); no user override
-    detection_method = getattr(config, "FACE_DETECTION_METHOD", "auto").lower() or "auto"
+    detection_method = (config.FACE_DETECTION_METHOD or "auto").lower()
     
     # Map string to enum
     source_type_map = {
@@ -521,7 +759,7 @@ def start_engagement_detection():
         if engagement_detector:
             engagement_detector.stop_detection()
 
-        lightweight = getattr(config, "LIGHTWEIGHT_MODE", False)
+        lightweight = config.LIGHTWEIGHT_MODE
         if lightweight:
             detection_method = "mediapipe"
         signifier_weights.load_weights()
@@ -536,11 +774,12 @@ def start_engagement_detection():
                 "error": "Failed to start detection. Check video source."
             }), 500
         
+        update_last_request()
         return jsonify({
             "success": True,
             "message": f"Engagement detection started from {source_type_str}",
             "detectionMethod": engagement_detector.detection_method,
-            "lightweightMode": getattr(engagement_detector, "lightweight_mode", False),
+            "lightweightMode": engagement_detector.lightweight_mode,
         })
     
     except Exception as e:
@@ -637,14 +876,38 @@ def engagement_transcript():
         if text:
             append_transcript(text)
             # Check for phrase-triggered insights (objection, interest, confusion, etc.)
-            match = _check_for_trigger_phrases(text)
-            if match:
-                category, phrase = match
-                append_speech_tag(category, phrase)  # For multimodal composite detection
-                _set_pending_aural_alert(category, phrase)
+            matches = check_speech_cues(text)
+            primary_alert_set = False
+            for category, phrase in matches:
+                discourse_boost = get_discourse_boost(text, category)
+                append_speech_tag(category, phrase, discourse_boost=discourse_boost)
+                if not primary_alert_set and _set_pending_aural_alert(category, phrase):
+                    primary_alert_set = True
         return "", 204
     except Exception as e:
         return jsonify({"error": "Failed to process transcript", "details": str(e)}), 500
+
+
+@api.route("/engagement/acoustic-context", methods=["POST"])
+def engagement_acoustic_context():
+    """
+    Receive windowed acoustic features from partner (or mic) audio.
+    Body: JSON { "windows": [ { loudness_norm, pitch_hz, pitch_contour, pitch_variability, tone_proxy?, speech_active } ] }
+    or a single object (treated as one window). Only stores when acoustic analysis is enabled.
+    """
+    try:
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        data = request.get_json(silent=True) or {}
+        windows = data.get("windows")
+        if windows is None and isinstance(data, dict) and "loudness_norm" in data:
+            windows = [data]
+        if not windows or not isinstance(windows, list):
+            return "", 204
+        append_acoustic_windows(windows)
+        return "", 204
+    except Exception as e:
+        return jsonify({"error": "Failed to process acoustic context", "details": str(e)}), 500
 
 
 @api.route("/engagement/video-feed", methods=["GET"])
@@ -676,7 +939,7 @@ def engagement_video_feed():
                     + jpeg + b"\r\n"
                 )
                 yield part
-            time.sleep(0.033)  # ~30 FPS
+            time.sleep(1.0 / max(30, min(60, config.TARGET_FPS_MAX)))
 
     return Response(
         generate(),
@@ -706,6 +969,7 @@ def stop_engagement_detection():
         clear_pending_aural_alert()
         clear_recent_speech_tags()
         clear_opportunity_state()
+        clear_acoustic_context()
 
         return jsonify({
             "success": True,
@@ -741,10 +1005,10 @@ def get_engagement_debug():
         
         debug_info = {
             "detector_running": engagement_detector.is_running,
-            "detection_method": getattr(engagement_detector, "detection_method", "unknown"),
+            "detection_method": getattr(engagement_detector, "detection_method", None) or "unknown",
             "fps": fps,
             "has_state": state is not None,
-            "consecutive_no_face": getattr(engagement_detector, "consecutive_no_face_frames", None),
+            "consecutive_no_face": engagement_detector.consecutive_no_face_frames,
         }
         
         if state:
@@ -802,6 +1066,7 @@ def get_engagement_state():
         }
     """
     global engagement_detector
+    update_last_request()
     
     if not engagement_detector:
         return jsonify({
@@ -821,7 +1086,7 @@ def get_engagement_state():
                 "faceDetected": False,
                 "confidence": 0.0,
                 "message": "No engagement data available yet",
-                "detectionMethod": getattr(engagement_detector, "detection_method", None) or "mediapipe",
+                "detectionMethod": (engagement_detector.detection_method or "mediapipe"),
                 "signifierScores": None,
                 "azureMetrics": None,
             })
@@ -846,7 +1111,7 @@ def get_engagement_state():
             "mouthActivity": state.metrics.mouth_activity
         }
         
-        # Sanitize signifier scores (0 or 100 only; no NaN/Inf)
+        # Sanitize signifier scores: continuous 0-100; only clamp and reject non-finite
         sig_scores = state.signifier_scores
         if sig_scores and isinstance(sig_scores, dict):
             clean = {}
@@ -855,24 +1120,22 @@ def get_engagement_state():
                     f = float(v)
                     if not math.isfinite(f):
                         clean[k] = 0.0
-                    elif f >= 50.0:
-                        clean[k] = 100.0
                     else:
-                        clean[k] = 0.0
+                        clean[k] = max(0.0, min(100.0, f))
                 except (TypeError, ValueError):
                     clean[k] = 0.0
             sig_scores = clean
         elif not sig_scores:
             sig_scores = None
 
-        # Binarize Azure metrics for display (base/composite -> 0 or 100)
+        # Azure metrics: return continuous 0-100 (no binarization)
         azure_metrics_out = None
         if state.azure_metrics and isinstance(state.azure_metrics, dict):
             base = state.azure_metrics.get("base") or {}
             composite = state.azure_metrics.get("composite") or {}
             azure_metrics_out = {
-                "base": binarize_metrics(base, up=55.0),
-                "composite": binarize_metrics(composite, up=55.0),
+                "base": base,
+                "composite": composite,
                 "score": state.azure_metrics.get("score", 0.0),
             }
 
@@ -889,6 +1152,7 @@ def get_engagement_state():
             "signifierScores": sig_scores,
             "detectionMethod": state.detection_method if state.detection_method else "mediapipe",
             "azureMetrics": azure_metrics_out,
+            "compositeMetrics": getattr(state, "composite_metrics", None) or {},
         }
         
         # Include alert if present (spike or phrase-triggered); consumed on first return.
@@ -898,7 +1162,15 @@ def get_engagement_state():
             "attention": m.get("attention"),
             "eyeContact": m.get("eyeContact"),
             "facialExpressiveness": m.get("facialExpressiveness"),
+            "headMovement": m.get("headMovement"),
+            "symmetry": m.get("symmetry"),
+            "mouthActivity": m.get("mouthActivity"),
         }
+        # Rich context for actionable, tailored insights (facial signifiers, composites, speech, acoustic)
+        signifier_scores = response_data.get("signifierScores") or {}
+        composite_metrics = response_data.get("compositeMetrics") or {}
+        recent_speech_tags = get_recent_speech_tags(12)
+        acoustic_tags_list = get_recent_acoustic_tags()
         engagement_alert = engagement_detector.get_pending_alert()
         if engagement_alert:
             alert = engagement_alert
@@ -907,18 +1179,43 @@ def get_engagement_state():
             aural = get_pending_aural_alert()
             alert = aural
             from_engagement = False
-        if alert and not engagement_detector.can_show_insight():
+        if alert and not engagement_detector.can_show_insight(alert):
+            # #region agent log
+            _debug_log({"id": "log_can_show_blocked", "location": "routes.py:can_show", "message": "can_show_insight blocked alert", "data": {"alert_type": alert.get("type")}, "hypothesisId": "E"})
+            # #endregion
             alert = None
             from_engagement = False
-        # Aural (phrase-triggered) insights: show only when at least one visual feature is present
+        # Aural (phrase-triggered): require some visual context. Relax gate for objection/concern/confusion to surface verbalized concern earlier (retention).
         if alert and not from_engagement:
             score = float(state.score) if state else 0.0
             sig = sig_scores or {}
-            detected_signifiers = sum(1 for v in sig.values() if float(v) == 100.0)
-            has_visual = score >= 60.0 or detected_signifiers >= 2
+            elevated_signifiers = sum(1 for v in sig.values() if float(v) >= 65.0)
+            category = (alert or {}).get("category", "")
+            if category in ("objection", "concern", "confusion"):
+                has_visual = score >= 50.0 or elevated_signifiers >= 1
+            else:
+                has_visual = score >= 60.0 or elevated_signifiers >= 2
             if not has_visual:
                 alert = None
         if alert:
+            # #region agent log
+            _debug_log({"id": "log_routes_alert", "location": "routes.py:alert", "message": "Alert present before insight gen", "data": {"alert_type": alert.get("type"), "opportunity_id": alert.get("opportunity_id"), "group": alert.get("group"), "from_engagement": from_engagement}, "hypothesisId": "B"})
+            # #endregion
+            # Build fresh, real-time context at the moment of insight generation.
+            # Ensures each popup is customized to the CURRENT engagement state.
+            fresh_context = _build_fresh_insight_context(
+                state=state,
+                signifier_scores=signifier_scores,
+                composite_metrics=composite_metrics,
+                metrics_summary=metrics_summary,
+                recent_speech_tags=recent_speech_tags,
+                acoustic_tags_list=acoustic_tags_list,
+            )
+            # #region agent log
+            import hashlib as _h
+            _ctx_hash = _h.md5(fresh_context.encode()).hexdigest()[:8] if fresh_context else "none"
+            _debug_log({"id": "log_routes_ctx", "location": "routes.py:ctx", "message": "Fresh context built", "data": {"state_score": float(state.score) if state else None, "ctx_len": len(fresh_context), "ctx_hash": _ctx_hash}, "hypothesisId": "C"})
+            # #endregion
             if from_engagement:
                 engagement_detector.clear_pending_alert()
                 if alert.get("type") in ("spike", "composite_100"):
@@ -930,9 +1227,17 @@ def get_engagement_state():
                             group=grp,
                             metrics_summary=metrics_summary,
                             recent_transcript=get_recent_transcript(),
+                            recent_context_bundle=fresh_context,
+                            signifier_scores=signifier_scores,
+                            composite_metrics=composite_metrics,
+                            recent_speech_tags=recent_speech_tags,
+                            acoustic_tags=acoustic_tags_list,
                         )
                         alert = dict(alert)
                         alert["message"] = (generated or "").strip() or alert.get("message", "Notable change in engagement.")
+                        # #region agent log
+                        _debug_log({"id": "log_routes_spike", "location": "routes.py:spike", "message": "Spike insight result", "data": {"msg_preview": (generated or "")[:90]}, "hypothesisId": "A"})
+                        # #endregion
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).warning("Insight generation failed: %s", e)
@@ -943,9 +1248,17 @@ def get_engagement_state():
                             context=alert.get("context"),
                             metrics_summary=metrics_summary,
                             recent_transcript=get_recent_transcript(),
+                            recent_context_bundle=fresh_context,
+                            signifier_scores=signifier_scores,
+                            composite_metrics=composite_metrics,
+                            recent_speech_tags=recent_speech_tags,
+                            acoustic_tags=acoustic_tags_list,
                         )
                         alert = dict(alert)
                         alert["message"] = (generated or "").strip() or alert.get("message", "Opportunity detected—consider acting on it.")
+                        # #region agent log
+                        _debug_log({"id": "log_routes_opp", "location": "routes.py:opp", "message": "Opportunity insight result", "data": {"msg_preview": (generated or "")[:90]}, "hypothesisId": "A"})
+                        # #endregion
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).warning("Opportunity insight generation failed: %s", e)
@@ -956,13 +1269,21 @@ def get_engagement_state():
                         category=alert.get("category", "interest"),
                         phrase=alert.get("phrase", ""),
                         metrics_summary=metrics_summary,
+                        recent_context_bundle=fresh_context,
+                        signifier_scores=signifier_scores,
+                        composite_metrics=composite_metrics,
+                        recent_speech_tags=recent_speech_tags,
+                        acoustic_tags=acoustic_tags_list,
                     )
                     alert = {"type": "aural", "message": (generated or "").strip() or "Notable comment—consider responding."}
+                    # #region agent log
+                    _debug_log({"id": "log_routes_aural", "location": "routes.py:aural", "message": "Aural insight result", "data": {"msg_preview": (generated or "")[:90]}, "hypothesisId": "A"})
+                    # #endregion
                 except Exception as e:
                     import logging
                     logging.getLogger(__name__).warning("Aural insight generation failed: %s", e)
                     alert = {"type": "aural", "message": "They said something noteworthy—consider acknowledging their point."}
-            engagement_detector.record_insight_shown()
+            engagement_detector.record_insight_shown(alert)
             response_data["alert"] = alert
         
         # Add cache control headers to ensure fresh data
@@ -977,6 +1298,83 @@ def get_engagement_state():
         return jsonify({
             "error": "Failed to get engagement state",
             "details": str(e)
+        }), 500
+
+
+@api.route("/api/engagement/context-and-response", methods=["GET"])
+def get_context_and_response():
+    """
+    Get last context sent to OpenAI and last AI response (for sidebar/dashboard).
+    
+    Returns:
+        JSON: { "contextSent": string | null, "response": string | null, "timestamp": number | null }
+    """
+    return jsonify({
+        "contextSent": engagement_context_store["last_context_sent"],
+        "response": engagement_context_store["last_response"],
+        "timestamp": engagement_context_store["last_response_timestamp"],
+    })
+
+
+@api.route("/api/engagement/record-response", methods=["POST"])
+def record_response():
+    """
+    Record the full assistant reply after stream completion (client calls this when stream ends).
+    
+    Request Body: { "response": "<full assistant reply>" }
+    """
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    data = request.get_json(silent=True) or {}
+    response_text = (data.get("response") or "").strip()
+    engagement_context_store["last_response"] = response_text if response_text else None
+    engagement_context_store["last_response_timestamp"] = time.time() if response_text else None
+    return jsonify({"ok": True})
+
+
+@api.route("/api/engagement/set-additional-context", methods=["POST"])
+def set_additional_context():
+    """
+    Store user-defined context to be appended to the next batch of context sent to OpenAI.
+    Dashboard calls this when the user clicks "Append to next context".
+    Body: { "additionalContext": "..." }. Clears pending if empty or omitted.
+    """
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    data = request.get_json(silent=True) or {}
+    value = (data.get("additionalContext") or "").strip() or None
+    engagement_context_store["pending_user_context"] = value
+    return jsonify({"ok": True, "pending": value is not None})
+
+
+@api.route("/api/context-push", methods=["POST", "GET"])
+def context_push():
+    """
+    Build current context bundle (including any pending user context), call OpenAI with fixed prompt,
+    store context and response, return both. Pending user context is consumed and cleared for this batch.
+    Frontend can call every 30–45 s when session is live.
+    
+    Returns:
+        JSON: { "context": "...", "response": "..." }
+    """
+    try:
+        full_context = _build_engagement_context_bundle(None)
+        engagement_context_store["last_context_sent"] = full_context
+        prompt = "Given the following real-time meeting context, what should the host know or do right now? Reply in 1–3 short sentences."
+        messages = [{"role": "user", "content": full_context + "\n\n" + prompt}]
+        response_text = get_foundry_service().chat_completion(
+            messages=messages,
+            system_prompt=config.SYSTEM_PROMPT,
+            max_tokens=150,
+        )
+        response_text = (response_text or "").strip()
+        engagement_context_store["last_response"] = response_text
+        engagement_context_store["last_response_timestamp"] = time.time()
+        return jsonify({"context": full_context, "response": response_text})
+    except Exception as e:
+        return jsonify({
+            "error": "Context push failed",
+            "details": str(e),
         }), 500
 
 
@@ -1039,7 +1437,7 @@ def get_engagement_context():
                 "error": "No engagement data available"
             }), 404
         
-        formatted_context = context_generator.format_for_ai(state.context)
+        formatted_context = _get_context_generator().format_for_ai(state.context)
         
         return jsonify({
             "context": formatted_context,
