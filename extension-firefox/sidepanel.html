@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Copilot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      height: 100%;
+      background: #111827;
+      color: #f1f5f9;
+    }
+    .frame-wrap {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+    }
+    .frame-wrap iframe {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    .fallback {
+      padding: 24px 16px;
+      text-align: center;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: #94a3b8;
+    }
+    .fallback a {
+      color: #06b6d4;
+      text-decoration: none;
+    }
+    .fallback a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="frame-wrap">
+    <iframe id="appFrame" src="http://localhost:5000/" title="Meeting Copilot"></iframe>
+    <div id="fallback" class="fallback" style="display: none;">
+      <p>Start the app on this computer first:</p>
+      <p><code>python app.py</code></p>
+      <p>Then click the extension icon again to open the app in this panel. No new tab needed.</p>
+      <p class="fallback-tip">Tip: Start the app with <code>python app.py</code>, then open this panel on your meeting tab.</p>
+    </div>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
