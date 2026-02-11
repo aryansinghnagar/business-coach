@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Copilot</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup">
+    <h1>Meeting Copilot</h1>
+    <p class="hint top">Use with a hosted Copilot app. No local server needed.</p>
+    <label for="appUrl" class="label">App URL</label>
+    <input type="url" id="appUrl" class="input" placeholder="https://your-copilot-app.example.com" />
+    <p id="status" class="status"></p>
+    <div class="actions">
+      <button id="saveUrl" class="btn btn-secondary">Save URL</button>
+      <button id="openSidePanel" class="btn btn-primary">Open in side panel</button>
+      <button id="openTab" class="btn btn-secondary">Open in new tab</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
