@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "Business Meeting Copilot",
+  "version": "1.1.0",
+  "description": "AI meeting coach with engagement detection and insights. Works in the browser with a hosted Copilot app—no local server required.",
+  "permissions": ["tabs", "storage", "https://*/*", "http://*/*"],
+  "background": { "scripts": ["background.js"] },
+  "browser_action": {
+    "default_title": "Open Meeting Copilot (side panel)",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "sidebar_action": {
+    "default_panel": "sidepanel.html",
+    "default_title": "Business Meeting Copilot"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "business-meeting-copilot@local",
+      "strict_min_version": "109.0"
+    }
+  }
+}

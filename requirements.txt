@@ -1,0 +1,12 @@
+python-dotenv==1.0.1
+Flask==3.1.2
+flask-cors==6.0.2
+Flask-Compress==1.14
+waitress==3.0.0
+openai==2.14.0
+requests==2.32.5
+mediapipe==0.10.9
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+azure-cognitiveservices-vision-face==0.7.0
+psutil>=5.9.0
